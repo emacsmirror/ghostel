@@ -280,7 +280,7 @@ fn fnDebugState(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
 
     var row_idx: usize = 0;
     while (gt.c.ghostty_render_state_row_iterator_next(term.row_iterator)) : (row_idx += 1) {
-        if (row_idx >= 3) break; // only first 3 rows
+        if (row_idx >= 10) break;
 
         if (gt.c.ghostty_render_state_row_get(term.row_iterator, gt.RS_ROW_DATA_CELLS, @ptrCast(&term.row_cells)) != gt.SUCCESS) {
             pos += (std.fmt.bufPrint(buf[pos..], "row{d}=FAIL ", .{row_idx}) catch break).len;
