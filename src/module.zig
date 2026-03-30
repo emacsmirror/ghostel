@@ -242,9 +242,17 @@ fn fnMouseEvent(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
 
 /// (ghostel--focus-event TERM GAINED)
 /// Encode a focus gained/lost event and send to the PTY.
+/// Only sends if the terminal has enabled focus reporting (DEC mode 1004).
 fn fnFocusEvent(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*anyopaque) callconv(.c) c.emacs_value {
     const env = emacs.Env.init(raw_env.?);
-    _ = env.getUserPtr(Terminal, args[0]) orelse return env.nil();
+    const term = env.getUserPtr(Terminal, args[0]) orelse return env.nil();
+
+    // Only send focus events if the terminal has enabled mode 1004
+    // Construct mode value manually: DEC private mode 1004 = value & 0x7FFF, ansi=false (bit 15=0)
+    const focus_mode: gt.c.GhosttyMode = 1004;
+    if (!term.isModeEnabled(focus_mode)) {
+        return env.nil();
+    }
 
     const gained = env.isNotNil(args[1]);
     const event: gt.c.GhosttyFocusEvent = if (gained) gt.c.GHOSTTY_FOCUS_GAINED else gt.c.GHOSTTY_FOCUS_LOST;
@@ -254,6 +262,10 @@ fn fnFocusEvent(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
     if (gt.c.ghostty_focus_encode(event, &buf, buf.len, &written) != gt.SUCCESS or written == 0) {
         return env.nil();
     }
+
+    // Stash env for the flush callback
+    term.env = env;
+    defer term.env = null;
 
     _ = env.call1(env.intern("ghostel--flush-output"), env.makeString(buf[0..written]));
     return env.t();

@@ -361,6 +361,34 @@
       (ghostel-test--assert-equal "dedup" old ghostel--last-directory))))
 
 ;; -----------------------------------------------------------------------
+;; Test: focus events gated by mode 1004
+;; -----------------------------------------------------------------------
+
+(defun ghostel-test-focus-events ()
+  "Test that focus events are only sent when mode 1004 is enabled."
+  (message "--- focus events ---")
+  (let ((term (ghostel--new 25 80 1000))
+        (ghostel--flush-output-data nil))
+    ;; Without mode 1004 enabled, focus-event should return nil (not sent)
+    (ghostel-test--assert-equal "focus ignored without mode 1004"
+                                nil
+                                (ghostel--focus-event term t))
+    ;; Enable mode 1004 via DECSET
+    (ghostel--write-input term "\e[?1004h")
+    ;; Now focus-event should return t (sent)
+    (ghostel-test--assert-equal "focus sent with mode 1004"
+                                t
+                                (ghostel--focus-event term t))
+    (ghostel-test--assert-equal "focus-out sent with mode 1004"
+                                t
+                                (ghostel--focus-event term nil))
+    ;; Disable mode 1004 via DECRST
+    (ghostel--write-input term "\e[?1004l")
+    (ghostel-test--assert-equal "focus ignored after mode 1004 reset"
+                                nil
+                                (ghostel--focus-event term t))))
+
+;; -----------------------------------------------------------------------
 ;; Test: incremental (partial) redraw
 ;; -----------------------------------------------------------------------
 
@@ -426,6 +454,7 @@
   (ghostel-test-title)
   (ghostel-test-crlf)
   (ghostel-test-incremental-redraw)
+  (ghostel-test-focus-events)
 
   ;; Integration test (spawns a real shell)
   (ghostel-test-shell-integration)

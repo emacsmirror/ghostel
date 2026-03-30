@@ -35,6 +35,7 @@
 (declare-function ghostel--scroll "ghostel-module")
 (declare-function ghostel--encode-key "ghostel-module")
 (declare-function ghostel--mouse-event "ghostel-module")
+(declare-function ghostel--focus-event "ghostel-module")
 
 ;;; Customization
 
@@ -523,6 +524,26 @@ DIR may be a file:// URL or a plain path."
       (when (and path (file-directory-p path))
         (setq default-directory (file-name-as-directory path))))))
 
+;;; Focus events
+
+(defun ghostel--focus-in ()
+  "Notify the terminal that Emacs gained focus.
+Only sends the event if the terminal has enabled focus reporting (mode 1004)."
+  (when (and (eq major-mode 'ghostel-mode)
+             ghostel--term
+             ghostel--process
+             (process-live-p ghostel--process))
+    (ghostel--focus-event ghostel--term t)))
+
+(defun ghostel--focus-out ()
+  "Notify the terminal that Emacs lost focus.
+Only sends the event if the terminal has enabled focus reporting (mode 1004)."
+  (when (and (eq major-mode 'ghostel-mode)
+             ghostel--term
+             ghostel--process
+             (process-live-p ghostel--process))
+    (ghostel--focus-event ghostel--term nil)))
+
 ;;; Process management
 
 (defun ghostel--filter (process output)
@@ -545,6 +566,8 @@ PROCESS is the shell process."
       (when ghostel--redraw-timer
         (cancel-timer ghostel--redraw-timer)
         (setq ghostel--redraw-timer nil))
+      (remove-hook 'focus-in-hook #'ghostel--focus-in)
+      (remove-hook 'focus-out-hook #'ghostel--focus-out)
       (let ((inhibit-read-only t))
         (goto-char (point-max))
         (insert "\n[Process exited]\n")))))
@@ -636,7 +659,8 @@ PROCESS is the shell process, WINDOWS is the list of windows."
   (setq-local scroll-conservatively 101)
   (setq-local window-adjust-process-window-size-function
               #'ghostel--window-adjust-process-window-size)
-  )
+  (add-hook 'focus-in-hook #'ghostel--focus-in)
+  (add-hook 'focus-out-hook #'ghostel--focus-out))
 
 ;;; Entry point
 

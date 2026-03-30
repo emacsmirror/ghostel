@@ -194,6 +194,15 @@ pub fn getPwd(self: *Self) ?[]const u8 {
     return pwd.ptr[0..pwd.len];
 }
 
+/// Check if a terminal mode is enabled.
+pub fn isModeEnabled(self: *Self, mode: gt.c.GhosttyMode) bool {
+    var enabled: bool = false;
+    if (gt.c.ghostty_terminal_mode_get(self.terminal, mode, &enabled) != gt.SUCCESS) {
+        return false;
+    }
+    return enabled;
+}
+
 /// Emacs finalizer — called when the user-ptr is garbage collected.
 pub fn emacsFinalize(ptr: ?*anyopaque) callconv(.c) void {
     if (ptr) |p| {
