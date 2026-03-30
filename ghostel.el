@@ -1,18 +1,79 @@
 ;;; ghostel.el --- Terminal emulator powered by libghostty -*- lexical-binding: t; -*-
 
+;; Copyright (c) 2026 Daniel Kraus <daniel@kraus.my>
+
 ;; Author: Daniel Kraus
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "25.1"))
-;; Keywords: terminals
 ;; URL: https://github.com/dakra/ghostel
+;; Version: 0.1.0
+;; Keywords: terminals
+;; Package-Requires: ((emacs "25.1"))
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;; This file is NOT part of GNU Emacs.
+
+;;; License:
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
-;; Ghostel is an Emacs terminal emulator that uses libghostty-vt
-;; (from the Ghostty project) for terminal emulation.  It follows the
-;; same architecture as emacs-libvterm: a native dynamic module handles
-;; terminal state and rendering, while Elisp manages the shell process,
-;; keymap, and buffer.
+;; Ghostel is an Emacs terminal emulator powered by libghostty-vt, the
+;; terminal emulation library extracted from the Ghostty project.  A
+;; native Zig dynamic module handles VT parsing, terminal state, and
+;; rendering, while this Elisp layer manages the shell process, keymap,
+;; buffer, and user-facing commands.
+;;
+;; Usage:
+;;
+;;   M-x ghostel          Open a new terminal
+;;   M-x ghostel-other    Switch to next terminal or create one
+;;
+;; Key bindings in the terminal buffer:
+;;
+;;   Most keys are sent directly to the shell.  Keys in
+;;   `ghostel-keymap-exceptions' (C-c, C-x, M-x, etc.) pass through
+;;   to Emacs.  Terminal control keys use a C-c prefix:
+;;
+;;   C-c C-c   Interrupt        C-c C-z   Suspend
+;;   C-c C-d   EOF              C-c C-\   Quit
+;;   C-c C-t   Copy mode        C-c C-y   Paste
+;;   C-c C-l   Clear scrollback C-c C-q   Send next key literally
+;;   C-y       Yank             M-y       Yank-pop
+;;
+;; Copy mode (C-c C-t) freezes the display and enables standard Emacs
+;; navigation.  Set mark with C-SPC, select text, then M-w to copy.
+;; Soft-wrapped newlines and trailing whitespace are stripped
+;; automatically.
+;;
+;; Shell integration:
+;;
+;;   For directory tracking (OSC 7), source the appropriate script
+;;   from etc/ in your shell configuration:
+;;
+;;     # bash (~/.bashrc)
+;;     [[ "$INSIDE_EMACS" = 'ghostel' ]] && \
+;;       source "$EMACS_GHOSTEL_PATH/etc/ghostel.bash"
+;;
+;;     # zsh (~/.zshrc)
+;;     [[ "$INSIDE_EMACS" = 'ghostel' ]] && \
+;;       source "$EMACS_GHOSTEL_PATH/etc/ghostel.zsh"
+;;
+;; Building the native module:
+;;
+;;   Run ./build.sh from the project root, or M-x ghostel-module-compile
+;;   from within Emacs.  Requires Zig 0.14+ and the vendored ghostty
+;;   submodule.
 
 ;;; Code:
 
@@ -261,7 +322,7 @@ These keys pass through to Emacs instead."
     (define-key map (kbd "C-c C-z")   #'ghostel-send-C-z)
     (define-key map (kbd "C-c C-\\")  #'ghostel-send-C-backslash)
     (define-key map (kbd "C-c C-d")   #'ghostel-send-C-d)
-    (define-key map (kbd "C-c C-k")   #'ghostel-copy-mode)
+    (define-key map (kbd "C-c C-t")   #'ghostel-copy-mode)
     (define-key map (kbd "C-c C-y")   #'ghostel-paste)
     (define-key map (kbd "C-c C-l")   #'ghostel-clear-scrollback)
     (define-key map (kbd "C-c C-q")   #'ghostel-send-next-key)
@@ -635,7 +696,7 @@ pasted using bracketed paste."
 (defvar ghostel-copy-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") #'ghostel-copy-mode-exit)
-    (define-key map (kbd "C-c C-k") #'ghostel-copy-mode-exit)
+    (define-key map (kbd "C-c C-t") #'ghostel-copy-mode-exit)
     (define-key map (kbd "M-w") #'ghostel-copy-mode-copy)
     (define-key map (kbd "C-w") #'ghostel-copy-mode-copy)
     map)
