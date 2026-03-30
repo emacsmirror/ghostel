@@ -234,8 +234,10 @@ PROCESS is the shell process, OUTPUT is the raw byte string."
   (when (buffer-live-p (process-buffer process))
     (with-current-buffer (process-buffer process)
       (when ghostel--term
-        ;; Feed bytes to native module (callbacks fire synchronously)
-        (ghostel--write-input ghostel--term output)
+        ;; Emacs PTYs lack ONLCR, so \n arrives without \r.
+        ;; Normalize: ensure every \n is preceded by \r.
+        (let ((data (replace-regexp-in-string "\r?\n" "\r\n" output)))
+          (ghostel--write-input ghostel--term data))
         ;; Schedule redraw
         (ghostel--invalidate)))))
 
