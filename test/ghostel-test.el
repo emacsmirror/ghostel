@@ -710,6 +710,14 @@
         (ghostel--detect-urls))
       (ghostel-test--assert "nonexistent file:line no help-echo"
                             (null (get-text-property 10 'help-echo))))
+    ;; File detection disabled
+    (with-temp-buffer
+      (insert (format "Error at %s:42 bad" test-file))
+      (let ((ghostel-enable-url-detection t)
+            (ghostel-enable-file-detection nil))
+        (ghostel--detect-urls))
+      (ghostel-test--assert "file detection disabled: no help-echo"
+                            (null (get-text-property 10 'help-echo))))
     ;; ghostel--open-link dispatches fileref:
     (let ((opened nil))
       (cl-letf (((symbol-function 'find-file-other-window)

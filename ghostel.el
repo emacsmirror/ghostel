@@ -158,6 +158,13 @@ clickable even if the program did not use OSC 8 hyperlink escapes."
   :type 'boolean
   :group 'ghostel)
 
+(defcustom ghostel-enable-file-detection t
+  "Automatically detect and linkify file:line references in terminal output.
+When non-nil, patterns like /path/to/file.el:42 are made clickable,
+opening the file at the given line in another window."
+  :type 'boolean
+  :group 'ghostel)
+
 (defcustom ghostel-keymap-exceptions
   '("C-c" "C-x" "C-u" "C-h" "C-g" "M-x" "M-o" "M-:" "C-\\")
   "Key sequences that should not be sent to the terminal.
@@ -834,9 +841,9 @@ at the given line in another window."
 (defun ghostel--detect-urls ()
   "Scan the buffer for plain-text URLs and file:line references.
 Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
-  (when ghostel-enable-url-detection
-    (save-excursion
-      ;; Pass 1: http(s) URLs
+  (save-excursion
+    ;; Pass 1: http(s) URLs
+    (when ghostel-enable-url-detection
       (goto-char (point-min))
       (while (re-search-forward
               "https?://[^ \t\n\r\"<>]*[^ \t\n\r\"<>.,;:!?)>]"
@@ -847,8 +854,9 @@ Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
             (let ((url (match-string-no-properties 0)))
               (put-text-property beg end 'help-echo url)
               (put-text-property beg end 'mouse-face 'highlight)
-              (put-text-property beg end 'keymap ghostel-link-map)))))
-      ;; Pass 2: file:line references (e.g. "./foo.el:42" or "/tmp/bar.rs:10")
+              (put-text-property beg end 'keymap ghostel-link-map))))))
+    ;; Pass 2: file:line references (e.g. "./foo.el:42" or "/tmp/bar.rs:10")
+    (when ghostel-enable-file-detection
       (goto-char (point-min))
       (while (re-search-forward
               "\\(?:\\./\\|/\\)[^ \t\n\r:\"<>]+:[0-9]+"
