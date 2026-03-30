@@ -127,9 +127,11 @@ fn applyStyle(env: emacs.Env, start: i64, end: i64, style: CellStyle, default_fg
     const effective_fg = if (style.inverse) (style.bg orelse default_bg) else (style.fg orelse default_fg);
     const effective_bg = if (style.inverse) (style.fg orelse default_fg) else (style.bg orelse default_bg);
 
+    const s = &emacs.sym;
+
     if (!colorEql(style.fg, null) or style.inverse) {
         const fg_str = formatColor(effective_fg, &fg_buf);
-        props[prop_count] = env.intern(":foreground");
+        props[prop_count] = s.@":foreground";
         prop_count += 1;
         props[prop_count] = env.makeString(fg_str);
         prop_count += 1;
@@ -137,35 +139,35 @@ fn applyStyle(env: emacs.Env, start: i64, end: i64, style: CellStyle, default_fg
 
     if (!colorEql(style.bg, null) or style.inverse) {
         const bg_str = formatColor(effective_bg, &bg_buf);
-        props[prop_count] = env.intern(":background");
+        props[prop_count] = s.@":background";
         prop_count += 1;
         props[prop_count] = env.makeString(bg_str);
         prop_count += 1;
     }
 
     if (style.bold) {
-        props[prop_count] = env.intern(":weight");
+        props[prop_count] = s.@":weight";
         prop_count += 1;
-        props[prop_count] = env.intern("bold");
+        props[prop_count] = s.bold;
         prop_count += 1;
     }
 
     if (style.faint) {
-        props[prop_count] = env.intern(":weight");
+        props[prop_count] = s.@":weight";
         prop_count += 1;
-        props[prop_count] = env.intern("light");
+        props[prop_count] = s.light;
         prop_count += 1;
     }
 
     if (style.italic) {
-        props[prop_count] = env.intern(":slant");
+        props[prop_count] = s.@":slant";
         prop_count += 1;
-        props[prop_count] = env.intern("italic");
+        props[prop_count] = s.italic;
         prop_count += 1;
     }
 
     if (style.underline != 0) {
-        props[prop_count] = env.intern(":underline");
+        props[prop_count] = s.@":underline";
         prop_count += 1;
         if (style.underline == 1 and style.underline_color == null) {
             props[prop_count] = env.t();
@@ -173,32 +175,32 @@ fn applyStyle(env: emacs.Env, start: i64, end: i64, style: CellStyle, default_fg
             var ul_props: [4]emacs.Value = undefined;
             var ul_count: usize = 0;
 
-            ul_props[ul_count] = env.intern(":style");
+            ul_props[ul_count] = s.@":style";
             ul_count += 1;
             ul_props[ul_count] = switch (style.underline) {
-                3 => env.intern("wave"),
-                2 => env.intern("double-line"),
-                4 => env.intern("dot"),
-                5 => env.intern("dash"),
-                else => env.intern("line"),
+                3 => s.wave,
+                2 => s.@"double-line",
+                4 => s.dot,
+                5 => s.dash,
+                else => s.line,
             };
             ul_count += 1;
 
             if (style.underline_color) |uc| {
                 var uc_buf: [7]u8 = undefined;
-                ul_props[ul_count] = env.intern(":color");
+                ul_props[ul_count] = s.@":color";
                 ul_count += 1;
                 ul_props[ul_count] = env.makeString(formatColor(uc, &uc_buf));
                 ul_count += 1;
             }
 
-            props[prop_count] = env.funcall(env.intern("list"), ul_props[0..ul_count]);
+            props[prop_count] = env.funcall(s.list, ul_props[0..ul_count]);
         }
         prop_count += 1;
     }
 
     if (style.strikethrough) {
-        props[prop_count] = env.intern(":strike-through");
+        props[prop_count] = s.@":strike-through";
         prop_count += 1;
         props[prop_count] = env.t();
         prop_count += 1;
@@ -206,10 +208,10 @@ fn applyStyle(env: emacs.Env, start: i64, end: i64, style: CellStyle, default_fg
 
     if (prop_count == 0) return;
 
-    const face = env.funcall(env.intern("list"), props[0..prop_count]);
+    const face = env.funcall(s.list, props[0..prop_count]);
     const start_val = env.makeInteger(start);
     const end_val = env.makeInteger(end);
-    env.putTextProperty(start_val, end_val, env.intern("face"), face);
+    env.putTextProperty(start_val, end_val, s.face, face);
 }
 
 /// A hyperlink span detected from the HTML formatter output.
@@ -432,8 +434,9 @@ fn applyHyperlinks(
 ) void {
     if (span_count == 0) return;
 
+    const s = &emacs.sym;
     // Cache the link keymap value
-    const link_map = env.call1(env.intern("symbol-value"), env.intern("ghostel-link-map"));
+    const link_map = env.call1(s.@"symbol-value", s.@"ghostel-link-map");
 
     for (spans[0..span_count]) |span| {
         const uri = uri_buf[span.uri_start..span.uri_start + span.uri_len];
@@ -447,9 +450,9 @@ fn applyHyperlinks(
         env.moveToColumn(@as(i64, span.col_end));
         const end = env.point();
 
-        env.putTextProperty(start, end, env.intern("help-echo"), env.makeString(uri));
-        env.putTextProperty(start, end, env.intern("mouse-face"), env.intern("highlight"));
-        env.putTextProperty(start, end, env.intern("keymap"), link_map);
+        env.putTextProperty(start, end, s.@"help-echo", env.makeString(uri));
+        env.putTextProperty(start, end, s.@"mouse-face", s.highlight);
+        env.putTextProperty(start, end, s.keymap, link_map);
     }
 }
 
@@ -595,7 +598,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
         var fg_hex: [7]u8 = undefined;
         var bg_hex: [7]u8 = undefined;
         _ = env.call2(
-            env.intern("ghostel--set-buffer-face"),
+            emacs.sym.@"ghostel--set-buffer-face",
             env.makeString(formatColor(default_fg, &fg_hex)),
             env.makeString(formatColor(default_bg, &bg_hex)),
         );
@@ -658,7 +661,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
                     env.insert("\n");
                     // Mark newlines from soft-wrapped rows so copy mode can filter them
                     if (prev_wrapped) {
-                        env.putTextProperty(nl_start, env.point(), env.intern("ghostel-wrap"), env.t());
+                        env.putTextProperty(nl_start, env.point(), emacs.sym.@"ghostel-wrap", env.t());
                     }
                 }
             }
@@ -690,7 +693,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
         }
 
         // Auto-detect plain-text URLs
-        _ = env.call0(env.intern("ghostel--detect-urls"));
+        _ = env.call0(emacs.sym.@"ghostel--detect-urls");
     }
 
     // Position cursor
@@ -715,13 +718,13 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
     _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VISUAL_STYLE, @ptrCast(&cursor_style));
 
     _ = env.call2(
-        env.intern("ghostel--set-cursor-style"),
+        emacs.sym.@"ghostel--set-cursor-style",
         env.makeInteger(@as(i64, cursor_style)),
         if (cursor_visible) env.t() else env.nil(),
     );
 
     // Update working directory from OSC 7
     if (term.getPwd()) |pwd| {
-        _ = env.call1(env.intern("ghostel--update-directory"), env.makeString(pwd));
+        _ = env.call1(emacs.sym.@"ghostel--update-directory", env.makeString(pwd));
     }
 }

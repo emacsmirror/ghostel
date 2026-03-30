@@ -41,6 +41,7 @@ export fn emacs_module_init(runtime: *c.struct_emacs_runtime) callconv(.c) c_int
     env.bindFunction("ghostel--debug-state", 1, 1, &fnDebugState, "Return debug info about terminal/render state.\n\n(ghostel--debug-state TERM)");
     env.bindFunction("ghostel--debug-feed", 2, 2, &fnDebugFeed, "Feed STR to terminal and return first row + cursor.\n\n(ghostel--debug-feed TERM STR)");
 
+    emacs.initSymbols(env);
     env.provide("ghostel-module");
     return 0;
 }
@@ -206,7 +207,7 @@ fn extractOsc52(env: emacs.Env, data: []const u8) void {
                     continue;
                 }
                 _ = env.call2(
-                    env.intern("ghostel--osc52-handle"),
+                    emacs.sym.@"ghostel--osc52-handle",
                     env.makeString(selection),
                     env.makeString(b64),
                 );
@@ -360,7 +361,7 @@ fn fnFocusEvent(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
     term.env = env;
     defer term.env = null;
 
-    _ = env.call1(env.intern("ghostel--flush-output"), env.makeString(buf[0..written]));
+    _ = env.call1(emacs.sym.@"ghostel--flush-output", env.makeString(buf[0..written]));
     return env.t();
 }
 
@@ -565,7 +566,7 @@ fn writePtyCallback(_: gt.Terminal, userdata: ?*anyopaque, data: [*c]const u8, l
 
     if (len == 0) return;
     const str = env.makeString(data[0..len]);
-    _ = env.call1(env.intern("ghostel--flush-output"), str);
+    _ = env.call1(emacs.sym.@"ghostel--flush-output", str);
 }
 
 /// Called when the terminal receives BEL.
@@ -573,7 +574,7 @@ fn bellCallback(_: gt.Terminal, userdata: ?*anyopaque) callconv(.c) void {
     const term: *Terminal = @ptrCast(@alignCast(userdata));
     const env = term.env orelse return;
 
-    _ = env.call0(env.intern("ding"));
+    _ = env.call0(emacs.sym.ding);
 }
 
 /// Called when the terminal title changes.
@@ -582,6 +583,6 @@ fn titleChangedCallback(_: gt.Terminal, userdata: ?*anyopaque) callconv(.c) void
     const env = term.env orelse return;
 
     if (term.getTitle()) |title| {
-        _ = env.call1(env.intern("ghostel--set-title"), env.makeString(title));
+        _ = env.call1(emacs.sym.@"ghostel--set-title", env.makeString(title));
     }
 }

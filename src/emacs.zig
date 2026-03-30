@@ -164,19 +164,19 @@ pub const Env = struct {
 
     // --- Convenience helpers ---
 
-    pub fn nil(self: Env) Value {
-        return self.intern("nil");
+    pub fn nil(_: Env) Value {
+        return sym.nil;
     }
 
-    pub fn t(self: Env) Value {
-        return self.intern("t");
+    pub fn t(_: Env) Value {
+        return sym.t;
     }
 
     /// Register a named Elisp function backed by a C function.
     pub fn bindFunction(self: Env, name: [*:0]const u8, min_arity: i32, max_arity: i32, func: *const fn (?*c.emacs_env, isize, [*c]c.emacs_value, ?*anyopaque) callconv(.c) c.emacs_value, docstring: [*:0]const u8) void {
         const fun = self.makeFunction(min_arity, max_arity, func, docstring, null);
-        const sym = self.intern(name);
-        _ = self.call2(self.intern("fset"), sym, fun);
+        const name_sym = self.intern(name);
+        _ = self.call2(self.intern("fset"), name_sym, fun);
     }
 
     /// Call (provide 'feature).
@@ -187,47 +187,47 @@ pub const Env = struct {
     // --- Buffer helpers ---
 
     pub fn point(self: Env) Value {
-        return self.call0(self.intern("point"));
+        return self.call0(sym.point);
     }
 
     pub fn gotoChar(self: Env, pos: Value) void {
-        _ = self.call1(self.intern("goto-char"), pos);
+        _ = self.call1(sym.@"goto-char", pos);
     }
 
     pub fn gotoCharN(self: Env, pos: i64) void {
-        _ = self.call1(self.intern("goto-char"), self.makeInteger(pos));
+        _ = self.call1(sym.@"goto-char", self.makeInteger(pos));
     }
 
     pub fn insert(self: Env, text: []const u8) void {
-        _ = self.call1(self.intern("insert"), self.makeString(text));
+        _ = self.call1(sym.insert, self.makeString(text));
     }
 
     pub fn forwardLine(self: Env, n: i64) i64 {
-        return self.extractInteger(self.call1(self.intern("forward-line"), self.makeInteger(n)));
+        return self.extractInteger(self.call1(sym.@"forward-line", self.makeInteger(n)));
     }
 
     pub fn moveToColumn(self: Env, col: i64) void {
-        _ = self.call1(self.intern("move-to-column"), self.makeInteger(col));
+        _ = self.call1(sym.@"move-to-column", self.makeInteger(col));
     }
 
     pub fn eraseBuffer(self: Env) void {
-        _ = self.call0(self.intern("erase-buffer"));
+        _ = self.call0(sym.@"erase-buffer");
     }
 
     pub fn lineEndPosition(self: Env) Value {
-        return self.call0(self.intern("line-end-position"));
+        return self.call0(sym.@"line-end-position");
     }
 
     pub fn pointMax(self: Env) Value {
-        return self.call0(self.intern("point-max"));
+        return self.call0(sym.@"point-max");
     }
 
     pub fn deleteRegion(self: Env, start: Value, end: Value) void {
-        _ = self.call2(self.intern("delete-region"), start, end);
+        _ = self.call2(sym.@"delete-region", start, end);
     }
 
     pub fn putTextProperty(self: Env, start: Value, end: Value, prop: Value, value: Value) void {
-        _ = self.call4(self.intern("put-text-property"), start, end, prop, value);
+        _ = self.call4(sym.@"put-text-property", start, end, prop, value);
     }
 
     /// Signal an error with a message string.
@@ -238,3 +238,78 @@ pub const Env = struct {
         );
     }
 };
+
+// ---------------------------------------------------------------------------
+// Pre-interned symbol cache — initialized once at module load, valid for the
+// lifetime of the Emacs session.  Every field is a global reference so it
+// stays valid across different emacs_env pointers.
+// ---------------------------------------------------------------------------
+
+pub const Sym = struct {
+    // Common values
+    nil: Value,
+    t: Value,
+
+    // Face property keywords
+    @":foreground": Value,
+    @":background": Value,
+    @":weight": Value,
+    @":slant": Value,
+    @":underline": Value,
+    @":style": Value,
+    @":color": Value,
+    @":strike-through": Value,
+
+    // Face property values
+    bold: Value,
+    light: Value,
+    italic: Value,
+    wave: Value,
+    @"double-line": Value,
+    dot: Value,
+    dash: Value,
+    line: Value,
+
+    // Built-in functions
+    list: Value,
+    @"symbol-value": Value,
+    @"put-text-property": Value,
+    @"goto-char": Value,
+    point: Value,
+    insert: Value,
+    @"forward-line": Value,
+    @"move-to-column": Value,
+    @"erase-buffer": Value,
+    @"line-end-position": Value,
+    @"point-max": Value,
+    @"delete-region": Value,
+
+    // Text property names
+    face: Value,
+    @"help-echo": Value,
+    @"mouse-face": Value,
+    highlight: Value,
+    keymap: Value,
+    @"ghostel-wrap": Value,
+
+    // Ghostel symbols
+    @"ghostel-link-map": Value,
+    @"ghostel--set-buffer-face": Value,
+    @"ghostel--detect-urls": Value,
+    @"ghostel--set-cursor-style": Value,
+    @"ghostel--update-directory": Value,
+    @"ghostel--osc52-handle": Value,
+    @"ghostel--flush-output": Value,
+    @"ghostel--set-title": Value,
+    ding: Value,
+};
+
+pub var sym: Sym = undefined;
+
+/// Initialize the global symbol cache.  Must be called once from
+/// emacs_module_init with the environment provided by Emacs.
+pub fn initSymbols(env: Env) void {
+    inline for (std.meta.fields(Sym)) |field| {
+        @field(sym, field.name) = env.makeGlobalRef(env.intern(field.name));
+    }
+}
