@@ -78,6 +78,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'term)
 (require 'url-parse)
 (require 'face-remap)
 
@@ -948,7 +949,8 @@ PROCESS is the shell process, EVENT describes the state change."
            (list
             "INSIDE_EMACS=ghostel"
             (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)
-            (format "TERM=%s" "xterm-256color")
+            "TERM=xterm-256color"
+            "COLORTERM=truecolor"
             (format "COLUMNS=%d" width)
             (format "LINES=%d" height))
            process-environment))
@@ -1021,6 +1023,7 @@ PROCESS is the shell process, WINDOWS is the list of windows."
 (define-derived-mode ghostel-mode fundamental-mode "Ghostel"
   "Major mode for Ghostel terminal emulator."
   (buffer-disable-undo)
+  (font-lock-mode -1)
   (setq buffer-read-only nil)
   (setq-local scroll-margin 0)
   (setq-local hscroll-margin 0)

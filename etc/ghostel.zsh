@@ -7,8 +7,3 @@ __ghostel_osc7() {
     printf '\e]7;file://%s%s\e\\' "$HOST" "$PWD"
 }
 precmd_functions+=(__ghostel_osc7)
-
-# Clear scrollback when running clear
-if [[ "$INSIDE_EMACS" = 'ghostel' ]]; then
-    alias clear='printf "\e[H\e[2J"'
-fi

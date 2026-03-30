@@ -7,8 +7,3 @@ __ghostel_osc7() {
     printf '\e]7;file://%s%s\e\\' "$HOSTNAME" "$PWD"
 }
 PROMPT_COMMAND="__ghostel_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-
-# Clear scrollback when running clear
-if [[ "$INSIDE_EMACS" = 'ghostel' ]]; then
-    alias clear='printf "\e[H\e[2J"'
-fi
