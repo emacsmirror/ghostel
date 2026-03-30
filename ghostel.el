@@ -742,6 +742,7 @@ PROCESS is the shell process."
          (process-environment
           (append
            (list
+            "INSIDE_EMACS=ghostel"
             (format "TERM=%s" "xterm-256color")
             (format "COLUMNS=%d" width)
             (format "LINES=%d" height))
