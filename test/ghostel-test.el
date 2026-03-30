@@ -208,6 +208,31 @@
                                 (ghostel-test--row0 term))))
 
 ;; -----------------------------------------------------------------------
+;; Test: multi-byte character rendering (box drawing, Unicode)
+;; -----------------------------------------------------------------------
+
+(defun ghostel-test-multibyte-rendering ()
+  "Test that styled multi-byte text renders without args-out-of-range."
+  (message "--- multibyte rendering ---")
+  (let ((buf (generate-new-buffer " *ghostel-test-mb*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 40 100))
+                 (inhibit-read-only t))
+            ;; Box drawing chars (multi-byte UTF-8) with color
+            ;; ┌──┐ uses U+250C (3 bytes), U+2500 (3 bytes), U+2510 (3 bytes)
+            (ghostel--write-input term "\e[32m┌──┐\e[0m text")
+            (ghostel--redraw term)
+            (let ((content (buffer-substring-no-properties (point-min) (point-max))))
+              (ghostel-test--assert-match "box drawing rendered" "┌──┐" content)
+              (ghostel-test--assert-match "text after box drawing" "text" content))
+            ;; Check face property on box drawing chars
+            (goto-char (point-min))
+            (let ((face (get-text-property (point) 'face)))
+              (ghostel-test--assert "multibyte face property" face))))
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
 ;; Test: title change (OSC 2)
 ;; -----------------------------------------------------------------------
 
@@ -581,6 +606,7 @@
   (ghostel-test-resize)
   (ghostel-test-scrollback)
   (ghostel-test-sgr)
+  (ghostel-test-multibyte-rendering)
   (ghostel-test-title)
   (ghostel-test-osc7-parsing)
   (ghostel-test-crlf)

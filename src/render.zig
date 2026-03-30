@@ -49,9 +49,11 @@ const CellStyle = struct {
 };
 
 /// Track style runs for propertizing after insertion.
+/// Positions are in characters (codepoints), not bytes, because
+/// Emacs put-text-property works with character positions.
 const RunInfo = struct {
-    start_byte: usize,
-    end_byte: usize,
+    start_char: usize,
+    end_char: usize,
     style: CellStyle,
 };
 
@@ -226,18 +228,25 @@ fn isRowWrapped(term: *Terminal) bool {
     return wrapped;
 }
 
+/// Result from buildRowContent: byte length for make_string, char count for properties.
+const RowContent = struct {
+    byte_len: usize,
+    char_len: usize,
+};
+
 /// Build text content and style runs for the current row in the iterator.
-/// Returns the text length written to text_buf.
+/// Style runs use character (codepoint) offsets for Emacs put-text-property.
 fn buildRowContent(
     term: *Terminal,
     text_buf: []u8,
     runs: []RunInfo,
     run_count: *usize,
-) usize {
-    var text_len: usize = 0;
+) RowContent {
+    var text_len: usize = 0; // byte offset
+    var char_len: usize = 0; // character (codepoint) offset
     run_count.* = 0;
     var current_style: CellStyle = .{};
-    var run_start: usize = 0;
+    var run_start_char: usize = 0;
 
     while (gt.c.ghostty_render_state_row_cells_next(term.row_cells)) {
         var graphemes_len: u32 = 0;
@@ -248,18 +257,18 @@ fn buildRowContent(
         const cell_style = readCellStyle(term.row_cells);
 
         // Flush run on style change
-        if (text_len > run_start and !cell_style.eql(current_style)) {
+        if (char_len > run_start_char and !cell_style.eql(current_style)) {
             if (run_count.* < runs.len) {
                 runs[run_count.*] = .{
-                    .start_byte = run_start,
-                    .end_byte = text_len,
+                    .start_char = run_start_char,
+                    .end_char = char_len,
                     .style = current_style,
                 };
                 run_count.* += 1;
             }
-            run_start = text_len;
+            run_start_char = char_len;
             current_style = cell_style;
-        } else if (text_len == run_start) {
+        } else if (char_len == run_start_char) {
             current_style = cell_style;
         }
 
@@ -267,6 +276,7 @@ fn buildRowContent(
             if (text_len < text_buf.len) {
                 text_buf[text_len] = ' ';
                 text_len += 1;
+                char_len += 1;
             }
             continue;
         }
@@ -283,43 +293,44 @@ fn buildRowContent(
             if (remaining.len < 4) break;
             const encoded_len = std.unicode.utf8Encode(cp, remaining) catch continue;
             text_len += encoded_len;
+            char_len += 1; // one codepoint = one Emacs character
         }
     }
 
     // Close final run
-    if (text_len > run_start and run_count.* < runs.len) {
+    if (char_len > run_start_char and run_count.* < runs.len) {
         runs[run_count.*] = .{
-            .start_byte = run_start,
-            .end_byte = text_len,
+            .start_char = run_start_char,
+            .end_char = char_len,
             .style = current_style,
         };
         run_count.* += 1;
     }
 
-    return text_len;
+    return .{ .byte_len = text_len, .char_len = char_len };
 }
 
 /// Insert row text and apply style runs.
 fn insertAndStyle(
     env: emacs.Env,
     text_buf: []const u8,
-    text_len: usize,
+    content: RowContent,
     runs: []const RunInfo,
     run_count: usize,
     default_fg: gt.ColorRgb,
     default_bg: gt.ColorRgb,
 ) void {
-    if (text_len == 0) return;
+    if (content.byte_len == 0) return;
 
     const insert_start = env.extractInteger(env.call0(env.intern("point")));
-    _ = env.call1(env.intern("insert"), env.makeString(text_buf[0..text_len]));
+    _ = env.call1(env.intern("insert"), env.makeString(text_buf[0..content.byte_len]));
 
     for (runs[0..run_count]) |run| {
-        if (run.start_byte >= text_len) break;
-        const run_end = @min(run.end_byte, text_len);
-        if (run_end <= run.start_byte) continue;
+        if (run.start_char >= content.char_len) break;
+        const run_end = @min(run.end_char, content.char_len);
+        if (run_end <= run.start_char) continue;
 
-        const prop_start = insert_start + @as(i64, @intCast(run.start_byte));
+        const prop_start = insert_start + @as(i64, @intCast(run.start_char));
         const prop_end = insert_start + @as(i64, @intCast(run_end));
         applyStyle(env, prop_start, prop_end, run.style, default_fg, default_bg);
     }
@@ -430,10 +441,10 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
 
             // Build row content
             var run_count: usize = 0;
-            const text_len = buildRowContent(term, &text_buf, &runs, &run_count);
+            const content = buildRowContent(term, &text_buf, &runs, &run_count);
 
             // Insert text and apply styles
-            insertAndStyle(env, &text_buf, text_len, &runs, run_count, default_fg, default_bg);
+            insertAndStyle(env, &text_buf, content, &runs, run_count, default_fg, default_bg);
 
             // Track whether this row is soft-wrapped for the next newline
             prev_wrapped = isRowWrapped(term);
