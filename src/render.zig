@@ -680,6 +680,19 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
         _ = gt.c.ghostty_render_state_set(term.render_state, gt.RS_OPT_DIRTY, @ptrCast(&dirty_false));
     }
 
+    // Scan for hyperlinks and apply text properties (before cursor positioning)
+    if (dirty != gt.DIRTY_FALSE) {
+        var hl_spans: [128]HyperlinkSpan = undefined;
+        var hl_uri_buf: [8192]u8 = undefined;
+        const hl = scanHyperlinks(term, &hl_spans, &hl_uri_buf);
+        if (hl.count > 0) {
+            applyHyperlinks(env, &hl_spans, hl.count, &hl_uri_buf);
+        }
+
+        // Auto-detect plain-text URLs
+        _ = env.call0(env.intern("ghostel--detect-urls"));
+    }
+
     // Position cursor
     var cursor_has_value: bool = false;
     _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VIEWPORT_HAS_VALUE, @ptrCast(&cursor_has_value));
@@ -710,15 +723,5 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
     // Update working directory from OSC 7
     if (term.getPwd()) |pwd| {
         _ = env.call1(env.intern("ghostel--update-directory"), env.makeString(pwd));
-    }
-
-    // Scan for hyperlinks and apply text properties
-    if (dirty != gt.DIRTY_FALSE) {
-        var hl_spans: [128]HyperlinkSpan = undefined;
-        var hl_uri_buf: [8192]u8 = undefined;
-        const hl = scanHyperlinks(term, &hl_spans, &hl_uri_buf);
-        if (hl.count > 0) {
-            applyHyperlinks(env, &hl_spans, hl.count, &hl_uri_buf);
-        }
     }
 }

@@ -645,7 +645,52 @@
     (goto-char 5)
     (ghostel-test--assert-equal "help-echo at point"
                                 "https://example.com"
-                                (get-text-property (point) 'help-echo))))
+                                (get-text-property (point) 'help-echo)))
+  ;; ghostel--open-link dispatches file:// to find-file
+  (ghostel-test--assert "open-link returns nil for empty"
+                        (null (ghostel--open-link nil)))
+  (ghostel-test--assert "open-link returns nil for non-string"
+                        (null (ghostel--open-link 42))))
+
+(defun ghostel-test-url-detection ()
+  "Test automatic URL detection in plain text."
+  (message "--- URL detection ---")
+  ;; Basic URL detection
+  (with-temp-buffer
+    (insert "Visit https://example.com for info")
+    (let ((ghostel-enable-url-detection t))
+      (ghostel--detect-urls))
+    (ghostel-test--assert-equal "url help-echo"
+                                "https://example.com"
+                                (get-text-property 7 'help-echo))
+    (ghostel-test--assert "url mouse-face"
+                          (get-text-property 7 'mouse-face))
+    (ghostel-test--assert "url keymap"
+                          (get-text-property 7 'keymap)))
+  ;; Disabled detection
+  (with-temp-buffer
+    (insert "Visit https://example.com for info")
+    (let ((ghostel-enable-url-detection nil))
+      (ghostel--detect-urls))
+    (ghostel-test--assert "url detection disabled: no help-echo"
+                          (null (get-text-property 7 'help-echo))))
+  ;; Skips existing OSC 8 links
+  (with-temp-buffer
+    (insert "Visit https://other.com for info")
+    (put-text-property 7 26 'help-echo "https://osc8.example.com")
+    (let ((ghostel-enable-url-detection t))
+      (ghostel--detect-urls))
+    (ghostel-test--assert-equal "osc8 link preserved"
+                                "https://osc8.example.com"
+                                (get-text-property 7 'help-echo)))
+  ;; URL not ending in punctuation
+  (with-temp-buffer
+    (insert "See https://example.com/path.")
+    (let ((ghostel-enable-url-detection t))
+      (ghostel--detect-urls))
+    (ghostel-test--assert-equal "url strips trailing dot"
+                                "https://example.com/path"
+                                (get-text-property 5 'help-echo))))
 
 ;; -----------------------------------------------------------------------
 ;; Runner
@@ -684,6 +729,7 @@
   (ghostel-test-color-palette)
   (ghostel-test-apply-palette)
   (ghostel-test-hyperlinks)
+  (ghostel-test-url-detection)
 
   ;; Integration test (spawns a real shell)
   (ghostel-test-shell-integration)

@@ -151,6 +151,13 @@ command output could silently overwrite your clipboard."
   :type 'boolean
   :group 'ghostel)
 
+(defcustom ghostel-enable-url-detection t
+  "Automatically detect and linkify URLs in terminal output.
+When non-nil, plain-text URLs (http:// and https://) are made
+clickable even if the program did not use OSC 8 hyperlink escapes."
+  :type 'boolean
+  :group 'ghostel)
+
 (defcustom ghostel-keymap-exceptions
   '("C-c" "C-x" "C-u" "C-h" "C-g" "M-x" "M-o" "M-:" "C-\\")
   "Key sequences that should not be sent to the terminal.
@@ -788,20 +795,43 @@ stripped so the copied text matches the original terminal content."
     map)
   "Keymap for clickable hyperlinks in ghostel buffers.")
 
+(defun ghostel--open-link (url)
+  "Open URL, dispatching by scheme.
+file:// URIs open in Emacs; http(s) and other schemes use `browse-url'."
+  (when (and url (stringp url))
+    (cond
+     ((string-match "\\`file://\\(?:localhost\\)?\\(/.*\\)" url)
+      (find-file (url-unhex-string (match-string 1 url))))
+     ((string-match-p "\\`[a-z]+://" url)
+      (browse-url url)))))
+
 (defun ghostel-open-link-at-click (event)
   "Open the hyperlink at the mouse click position."
   (interactive "e")
-  (let* ((pos (posn-point (event-start event)))
-         (url (get-text-property pos 'help-echo)))
-    (when (and url (stringp url) (string-match-p "\\`https?://" url))
-      (browse-url url))))
+  (ghostel--open-link
+   (get-text-property (posn-point (event-start event)) 'help-echo)))
 
 (defun ghostel-open-link-at-point ()
   "Open the hyperlink at point."
   (interactive)
-  (let ((url (get-text-property (point) 'help-echo)))
-    (when (and url (stringp url) (string-match-p "\\`https?://" url))
-      (browse-url url))))
+  (ghostel--open-link (get-text-property (point) 'help-echo)))
+
+(defun ghostel--detect-urls ()
+  "Scan the buffer for plain-text URLs and apply hyperlink properties.
+Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
+  (when ghostel-enable-url-detection
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward
+              "https?://[^ \t\n\r\"<>]*[^ \t\n\r\"<>.,;:!?)>]"
+              nil t)
+        (let ((beg (match-beginning 0))
+              (end (match-end 0)))
+          (unless (get-text-property beg 'help-echo)
+            (let ((url (match-string-no-properties 0)))
+              (put-text-property beg end 'help-echo url)
+              (put-text-property beg end 'mouse-face 'highlight)
+              (put-text-property beg end 'keymap ghostel-link-map))))))))
 
 ;;; Callbacks from native module
 
