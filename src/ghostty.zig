@@ -106,3 +106,10 @@ pub const CURSOR_BLOCK_HOLLOW: c_int = c.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYL
 pub const SCROLL_TOP: c_int = c.GHOSTTY_SCROLL_VIEWPORT_TOP;
 pub const SCROLL_BOTTOM: c_int = c.GHOSTTY_SCROLL_VIEWPORT_BOTTOM;
 pub const SCROLL_DELTA: c_int = c.GHOSTTY_SCROLL_VIEWPORT_DELTA;
+
+// Formatter types and constants
+pub const Formatter = c.GhosttyFormatter;
+pub const FormatterTerminalOptions = c.GhosttyFormatterTerminalOptions;
+pub const FormatterTerminalExtra = c.GhosttyFormatterTerminalExtra;
+pub const FormatterScreenExtra = c.GhosttyFormatterScreenExtra;
+pub const FORMATTER_FORMAT_HTML: c_int = c.GHOSTTY_FORMATTER_FORMAT_HTML;

@@ -184,6 +184,52 @@ pub const Env = struct {
         _ = self.call1(self.intern("provide"), self.intern(feature));
     }
 
+    // --- Buffer helpers ---
+
+    pub fn point(self: Env) Value {
+        return self.call0(self.intern("point"));
+    }
+
+    pub fn gotoChar(self: Env, pos: Value) void {
+        _ = self.call1(self.intern("goto-char"), pos);
+    }
+
+    pub fn gotoCharN(self: Env, pos: i64) void {
+        _ = self.call1(self.intern("goto-char"), self.makeInteger(pos));
+    }
+
+    pub fn insert(self: Env, text: []const u8) void {
+        _ = self.call1(self.intern("insert"), self.makeString(text));
+    }
+
+    pub fn forwardLine(self: Env, n: i64) i64 {
+        return self.extractInteger(self.call1(self.intern("forward-line"), self.makeInteger(n)));
+    }
+
+    pub fn moveToColumn(self: Env, col: i64) void {
+        _ = self.call1(self.intern("move-to-column"), self.makeInteger(col));
+    }
+
+    pub fn eraseBuffer(self: Env) void {
+        _ = self.call0(self.intern("erase-buffer"));
+    }
+
+    pub fn lineEndPosition(self: Env) Value {
+        return self.call0(self.intern("line-end-position"));
+    }
+
+    pub fn pointMax(self: Env) Value {
+        return self.call0(self.intern("point-max"));
+    }
+
+    pub fn deleteRegion(self: Env, start: Value, end: Value) void {
+        _ = self.call2(self.intern("delete-region"), start, end);
+    }
+
+    pub fn putTextProperty(self: Env, start: Value, end: Value, prop: Value, value: Value) void {
+        _ = self.call4(self.intern("put-text-property"), start, end, prop, value);
+    }
+
     /// Signal an error with a message string.
     pub fn signalError(self: Env, msg: []const u8) void {
         self.nonLocalExitSignal(

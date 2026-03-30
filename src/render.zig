@@ -207,14 +207,250 @@ fn applyStyle(env: emacs.Env, start: i64, end: i64, style: CellStyle, default_fg
     if (prop_count == 0) return;
 
     const face = env.funcall(env.intern("list"), props[0..prop_count]);
+    const start_val = env.makeInteger(start);
+    const end_val = env.makeInteger(end);
+    env.putTextProperty(start_val, end_val, env.intern("face"), face);
+}
 
-    _ = env.call4(
-        env.intern("put-text-property"),
-        env.makeInteger(start),
-        env.makeInteger(end),
-        env.intern("face"),
-        face,
-    );
+/// A hyperlink span detected from the HTML formatter output.
+const HyperlinkSpan = struct {
+    row: u16,
+    col_start: u16,
+    col_end: u16,
+    uri_start: usize, // offset into uri_buf
+    uri_len: usize,
+};
+
+/// Result of hyperlink scanning.
+const HyperlinkResult = struct {
+    count: usize,
+    uri_used: usize,
+};
+
+/// Scan the terminal for hyperlinks using the HTML formatter.
+/// Returns the number of hyperlink spans found.
+fn scanHyperlinks(
+    term: *Terminal,
+    spans: []HyperlinkSpan,
+    uri_buf: []u8,
+) HyperlinkResult {
+    // Create HTML formatter
+    var opts = std.mem.zeroes(gt.FormatterTerminalOptions);
+    opts.size = @sizeOf(gt.FormatterTerminalOptions);
+    opts.emit = @intCast(gt.FORMATTER_FORMAT_HTML);
+
+    var formatter: gt.Formatter = undefined;
+    if (gt.c.ghostty_formatter_terminal_new(null, &formatter, term.terminal, opts) != gt.SUCCESS) {
+        return .{ .count = 0, .uri_used = 0 };
+    }
+    defer gt.c.ghostty_formatter_free(formatter);
+
+    // Format into a stack buffer
+    var html_buf: [262144]u8 = undefined;
+    var out_len: usize = 0;
+    if (gt.c.ghostty_formatter_format_buf(formatter, &html_buf, html_buf.len, &out_len) != gt.SUCCESS) {
+        return .{ .count = 0, .uri_used = 0 };
+    }
+
+    return parseHtmlHyperlinks(html_buf[0..out_len], spans, uri_buf);
+}
+
+/// Parse HTML output to extract hyperlink spans and their URIs.
+fn parseHtmlHyperlinks(
+    html: []const u8,
+    spans: []HyperlinkSpan,
+    uri_buf: []u8,
+) HyperlinkResult {
+    var row: u16 = 0;
+    var col: u16 = 0;
+    var span_count: usize = 0;
+    var uri_used: usize = 0;
+
+    var in_link = false;
+    var link_start_col: u16 = 0;
+    var link_start_row: u16 = 0;
+    var link_uri_start: usize = 0;
+    var link_uri_len: usize = 0;
+
+    const a_open = "<a href=\"";
+    const a_close = "</a>";
+
+    var i: usize = 0;
+    while (i < html.len) {
+        if (html[i] == '<') {
+            const remaining = html[i..];
+            if (remaining.len >= a_open.len and std.mem.eql(u8, remaining[0..a_open.len], a_open)) {
+                // <a href="URI"> — extract URI
+                const uri_start_idx = i + a_open.len;
+                var uri_end_idx = uri_start_idx;
+                while (uri_end_idx < html.len and html[uri_end_idx] != '"') : (uri_end_idx += 1) {}
+
+                const raw_uri = html[uri_start_idx..uri_end_idx];
+                // Un-escape HTML entities in the URI
+                const decoded_len = htmlUnescapeInto(raw_uri, uri_buf[uri_used..]);
+                if (decoded_len > 0) {
+                    link_uri_start = uri_used;
+                    link_uri_len = decoded_len;
+                    uri_used += decoded_len;
+                }
+
+                // Close any previous open link
+                if (in_link and span_count < spans.len and col > link_start_col) {
+                    spans[span_count] = .{
+                        .row = link_start_row,
+                        .col_start = link_start_col,
+                        .col_end = col,
+                        .uri_start = link_uri_start,
+                        .uri_len = link_uri_len,
+                    };
+                    span_count += 1;
+                }
+
+                in_link = true;
+                link_start_row = row;
+                link_start_col = col;
+
+                // Skip to end of tag
+                while (i < html.len and html[i] != '>') : (i += 1) {}
+                if (i < html.len) i += 1;
+                continue;
+            } else if (remaining.len >= a_close.len and std.mem.eql(u8, remaining[0..a_close.len], a_close)) {
+                // </a> — end hyperlink
+                if (in_link and span_count < spans.len) {
+                    const start_col = if (row == link_start_row) link_start_col else 0;
+                    if (col > start_col) {
+                        spans[span_count] = .{
+                            .row = row,
+                            .col_start = start_col,
+                            .col_end = col,
+                            .uri_start = link_uri_start,
+                            .uri_len = link_uri_len,
+                        };
+                        span_count += 1;
+                    }
+                }
+                in_link = false;
+                i += a_close.len;
+                continue;
+            } else {
+                // Other tag — skip to closing >
+                while (i < html.len and html[i] != '>') : (i += 1) {}
+                if (i < html.len) i += 1;
+                continue;
+            }
+        } else if (html[i] == '&') {
+            // HTML entity — counts as 1 visible character
+            while (i < html.len and html[i] != ';') : (i += 1) {}
+            if (i < html.len) i += 1;
+            col += 1;
+        } else if (html[i] == '\n') {
+            // Row boundary
+            if (in_link) {
+                const start_col = if (row == link_start_row) link_start_col else 0;
+                if (col > start_col and span_count < spans.len) {
+                    spans[span_count] = .{
+                        .row = row,
+                        .col_start = start_col,
+                        .col_end = col,
+                        .uri_start = link_uri_start,
+                        .uri_len = link_uri_len,
+                    };
+                    span_count += 1;
+                }
+                // Link continues on next row
+                link_start_row = row + 1;
+                link_start_col = 0;
+            }
+            row += 1;
+            col = 0;
+            i += 1;
+        } else {
+            // Regular character — advance column, handle UTF-8
+            if (html[i] & 0x80 == 0) {
+                i += 1;
+            } else if (html[i] & 0xE0 == 0xC0) {
+                i += 2;
+            } else if (html[i] & 0xF0 == 0xE0) {
+                i += 3;
+            } else {
+                i += @min(4, html.len - i);
+            }
+            col += 1;
+        }
+    }
+
+    return .{ .count = span_count, .uri_used = uri_used };
+}
+
+/// Decode HTML entities in src into dst. Returns number of bytes written.
+fn htmlUnescapeInto(src: []const u8, dst: []u8) usize {
+    var di: usize = 0;
+    var si: usize = 0;
+    while (si < src.len and di < dst.len) {
+        if (src[si] == '&') {
+            const rem = src[si..];
+            if (std.mem.startsWith(u8, rem, "&amp;")) {
+                dst[di] = '&';
+                di += 1;
+                si += 5;
+            } else if (std.mem.startsWith(u8, rem, "&lt;")) {
+                dst[di] = '<';
+                di += 1;
+                si += 4;
+            } else if (std.mem.startsWith(u8, rem, "&gt;")) {
+                dst[di] = '>';
+                di += 1;
+                si += 4;
+            } else if (std.mem.startsWith(u8, rem, "&quot;")) {
+                dst[di] = '"';
+                di += 1;
+                si += 6;
+            } else if (std.mem.startsWith(u8, rem, "&#39;")) {
+                dst[di] = '\'';
+                di += 1;
+                si += 5;
+            } else {
+                dst[di] = src[si];
+                di += 1;
+                si += 1;
+            }
+        } else {
+            dst[di] = src[si];
+            di += 1;
+            si += 1;
+        }
+    }
+    return di;
+}
+
+/// Apply hyperlink text properties to the Emacs buffer.
+fn applyHyperlinks(
+    env: emacs.Env,
+    spans: []const HyperlinkSpan,
+    span_count: usize,
+    uri_buf: []const u8,
+) void {
+    if (span_count == 0) return;
+
+    // Cache the link keymap value
+    const link_map = env.call1(env.intern("symbol-value"), env.intern("ghostel-link-map"));
+
+    for (spans[0..span_count]) |span| {
+        const uri = uri_buf[span.uri_start..span.uri_start + span.uri_len];
+        if (uri.len == 0) continue;
+
+        // Navigate to span start
+        env.gotoCharN(1);
+        _ = env.forwardLine(@as(i64, span.row));
+        env.moveToColumn(@as(i64, span.col_start));
+        const start = env.point();
+        env.moveToColumn(@as(i64, span.col_end));
+        const end = env.point();
+
+        env.putTextProperty(start, end, env.intern("help-echo"), env.makeString(uri));
+        env.putTextProperty(start, end, env.intern("mouse-face"), env.intern("highlight"));
+        env.putTextProperty(start, end, env.intern("keymap"), link_map);
+    }
 }
 
 /// Check if the current row in the iterator is soft-wrapped.
@@ -322,8 +558,8 @@ fn insertAndStyle(
 ) void {
     if (content.byte_len == 0) return;
 
-    const insert_start = env.extractInteger(env.call0(env.intern("point")));
-    _ = env.call1(env.intern("insert"), env.makeString(text_buf[0..content.byte_len]));
+    const insert_start = env.extractInteger(env.point());
+    env.insert(text_buf[0..content.byte_len]);
 
     for (runs[0..run_count]) |run| {
         if (run.start_char >= content.char_len) break;
@@ -372,7 +608,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
         // Incremental redraw: only update dirty rows when possible.
         const partial = (dirty == gt.DIRTY_PARTIAL);
         if (!partial) {
-            _ = env.call0(env.intern("erase-buffer"));
+            env.eraseBuffer();
         }
 
         // Shared buffers for row content
@@ -403,20 +639,14 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
 
             if (partial) {
                 // Navigate to this row and clear its content
-                _ = env.call1(env.intern("goto-char"), env.makeInteger(1));
-                const moved = env.extractInteger(
-                    env.call1(env.intern("forward-line"), env.makeInteger(@as(i64, @intCast(row_count)))),
-                );
+                env.gotoCharN(1);
+                const moved = env.forwardLine(@as(i64, @intCast(row_count)));
                 if (moved != 0) {
                     // Row doesn't exist yet — fall through to append
-                    _ = env.call1(env.intern("goto-char"), env.call0(env.intern("point-max")));
-                    _ = env.call1(env.intern("insert"), env.makeString("\n"));
+                    env.gotoChar(env.pointMax());
+                    env.insert("\n");
                 } else {
-                    _ = env.call2(
-                        env.intern("delete-region"),
-                        env.call0(env.intern("point")),
-                        env.call0(env.intern("line-end-position")),
-                    );
+                    env.deleteRegion(env.point(), env.lineEndPosition());
                 }
                 // Clear per-row dirty flag
                 const row_clean: bool = false;
@@ -424,17 +654,11 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
             } else {
                 // Full redraw: insert newline between rows
                 if (row_count > 0) {
-                    const nl_start = env.call0(env.intern("point"));
-                    _ = env.call1(env.intern("insert"), env.makeString("\n"));
+                    const nl_start = env.point();
+                    env.insert("\n");
                     // Mark newlines from soft-wrapped rows so copy mode can filter them
                     if (prev_wrapped) {
-                        _ = env.call4(
-                            env.intern("put-text-property"),
-                            nl_start,
-                            env.call0(env.intern("point")),
-                            env.intern("ghostel-wrap"),
-                            env.t(),
-                        );
+                        env.putTextProperty(nl_start, env.point(), env.intern("ghostel-wrap"), env.t());
                     }
                 }
             }
@@ -465,9 +689,9 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
         _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VIEWPORT_X, @ptrCast(&cx));
         _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VIEWPORT_Y, @ptrCast(&cy));
 
-        _ = env.call1(env.intern("goto-char"), env.makeInteger(1));
-        _ = env.call1(env.intern("forward-line"), env.makeInteger(@as(i64, cy)));
-        _ = env.call1(env.intern("move-to-column"), env.makeInteger(@as(i64, cx)));
+        env.gotoCharN(1);
+        _ = env.forwardLine(@as(i64, cy));
+        env.moveToColumn(@as(i64, cx));
     }
 
     // Update cursor style
@@ -486,5 +710,15 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
     // Update working directory from OSC 7
     if (term.getPwd()) |pwd| {
         _ = env.call1(env.intern("ghostel--update-directory"), env.makeString(pwd));
+    }
+
+    // Scan for hyperlinks and apply text properties
+    if (dirty != gt.DIRTY_FALSE) {
+        var hl_spans: [128]HyperlinkSpan = undefined;
+        var hl_uri_buf: [8192]u8 = undefined;
+        const hl = scanHyperlinks(term, &hl_spans, &hl_uri_buf);
+        if (hl.count > 0) {
+            applyHyperlinks(env, &hl_spans, hl.count, &hl_uri_buf);
+        }
     }
 }

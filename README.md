@@ -123,6 +123,7 @@ Soft-wrapped newlines are automatically stripped from copied text.
 ### Shell Integration
 - Directory tracking via OSC 7
 - Title tracking (buffer renamed from OSC 2)
+- OSC 8 hyperlinks — clickable URLs in terminal output (click or `RET` to open)
 - OSC 52 clipboard support (opt-in, for remote sessions)
 - `INSIDE_EMACS` and `EMACS_GHOSTEL_PATH` environment variables
 

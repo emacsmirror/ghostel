@@ -777,6 +777,31 @@ stripped so the copied text matches the original terminal content."
       (message "Copied to kill ring")))
   (ghostel-copy-mode-exit))
 
+;;; Hyperlinks (OSC 8)
+
+(defvar ghostel-link-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'ghostel-open-link-at-click)
+    (define-key map [mouse-2] #'ghostel-open-link-at-click)
+    (define-key map (kbd "RET") #'ghostel-open-link-at-point)
+    map)
+  "Keymap for clickable hyperlinks in ghostel buffers.")
+
+(defun ghostel-open-link-at-click (event)
+  "Open the hyperlink at the mouse click position."
+  (interactive "e")
+  (let* ((pos (posn-point (event-start event)))
+         (url (get-text-property pos 'help-echo)))
+    (when (and url (stringp url) (string-match-p "\\`https?://" url))
+      (browse-url url))))
+
+(defun ghostel-open-link-at-point ()
+  "Open the hyperlink at point."
+  (interactive)
+  (let ((url (get-text-property (point) 'help-echo)))
+    (when (and url (stringp url) (string-match-p "\\`https?://" url))
+      (browse-url url))))
+
 ;;; Callbacks from native module
 
 (defun ghostel--osc52-handle (_selection base64-data)

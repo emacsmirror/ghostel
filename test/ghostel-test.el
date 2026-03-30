@@ -623,6 +623,30 @@
                                (string-prefix-p "#" color)
                                (= (length color) 7)))))
 
+(defun ghostel-test-hyperlinks ()
+  "Test hyperlink keymap and helpers."
+  (message "--- hyperlinks ---")
+  ;; Link keymap exists
+  (ghostel-test--assert "ghostel-link-map is a keymap"
+                        (keymapp ghostel-link-map))
+  ;; mouse-1 bound
+  (ghostel-test--assert "mouse-1 bound in link map"
+                        (lookup-key ghostel-link-map [mouse-1]))
+  ;; RET bound
+  (ghostel-test--assert "RET bound in link map"
+                        (lookup-key ghostel-link-map (kbd "RET")))
+  ;; open-link-at-point is a command
+  (ghostel-test--assert "open-link-at-point is interactive"
+                        (commandp #'ghostel-open-link-at-point))
+  ;; Test that help-echo property is read correctly
+  (with-temp-buffer
+    (insert "click here")
+    (put-text-property 1 11 'help-echo "https://example.com")
+    (goto-char 5)
+    (ghostel-test--assert-equal "help-echo at point"
+                                "https://example.com"
+                                (get-text-property (point) 'help-echo))))
+
 ;; -----------------------------------------------------------------------
 ;; Runner
 ;; -----------------------------------------------------------------------
@@ -659,6 +683,7 @@
   (ghostel-test-soft-wrap-copy)
   (ghostel-test-color-palette)
   (ghostel-test-apply-palette)
+  (ghostel-test-hyperlinks)
 
   ;; Integration test (spawns a real shell)
   (ghostel-test-shell-integration)
