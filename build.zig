@@ -11,10 +11,23 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    // Emacs module header
-    mod.addSystemIncludePath(.{
-        .cwd_relative = "/Applications/Emacs.app/Contents/Resources/include",
-    });
+    // Emacs module header — check EMACS_INCLUDE_DIR env, then platform defaults
+    if (b.graph.env_map.get("EMACS_INCLUDE_DIR")) |inc_dir| {
+        mod.addSystemIncludePath(.{ .cwd_relative = inc_dir });
+    } else {
+        const resolved = target.result;
+        if (resolved.os.tag == .macos) {
+            mod.addSystemIncludePath(.{
+                .cwd_relative = "/Applications/Emacs.app/Contents/Resources/include",
+            });
+        } else {
+            // Linux: typical pkg-config path for emacs module headers.
+            // Also try /usr/include which has emacs-module.h on most distros.
+            mod.addSystemIncludePath(.{
+                .cwd_relative = "/usr/include",
+            });
+        }
+    }
 
     // libghostty-vt headers and static library (pre-built)
     // Build with: cd vendor/ghostty && zig build -Demit-lib-vt=true
@@ -37,10 +50,16 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(lib);
 
-    // Copy the shared library to project root for easy Emacs loading
+    // Copy the shared library to project root for easy Emacs loading.
+    // Use the correct platform suffix.
+    const resolved = target.result;
+    const lib_name = if (resolved.os.tag == .macos)
+        "../ghostel-module.dylib"
+    else
+        "../ghostel-module.so";
     const copy_step = b.addInstallFile(
         lib.getEmittedBin(),
-        "../ghostel-module.dylib",
+        lib_name,
     );
     b.getInstallStep().dependOn(&copy_step.step);
 }

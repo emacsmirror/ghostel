@@ -82,13 +82,118 @@
 (require 'url-parse)
 (require 'face-remap)
 
+(defvar ghostel-github-release-url
+  "https://github.com/dakra/ghostel/releases"
+  "Base URL for ghostel GitHub releases.")
+
+(defun ghostel--module-platform-tag ()
+  "Return platform tag for the current system, e.g. \"x86_64-linux\".
+Returns nil if the platform is not recognized."
+  (let* ((arch (car (split-string system-configuration "-")))
+         (os (cond
+              ((eq system-type 'darwin) "macos")
+              ((eq system-type 'gnu/linux) "linux")
+              (t nil))))
+    (when os
+      (format "%s-%s" arch os))))
+
+(defun ghostel--module-asset-name ()
+  "Return the expected release asset file name for the current platform."
+  (let ((tag (ghostel--module-platform-tag)))
+    (when tag
+      (format "ghostel-module-%s%s" tag module-file-suffix))))
+
+(defun ghostel--maybe-download-module (dir)
+  "Try to download a pre-built module into DIR if available.
+Downloads from the latest GitHub release matching the current platform.
+Does nothing if the platform is unsupported or the download fails."
+  (condition-case err
+      (let ((asset-name (ghostel--module-asset-name)))
+        (when asset-name
+          (let* ((version (ghostel--package-version))
+                 (url (format "%s/download/%s/%s"
+                              ghostel-github-release-url
+                              (if version (concat "v" version) "latest")
+                              asset-name))
+                 (dest (expand-file-name
+                        (concat "ghostel-module" module-file-suffix) dir)))
+            (message "ghostel: downloading native module from %s..." url)
+            (when (ghostel--download-file url dest)
+              (message "ghostel: native module downloaded to %s" dest)))))
+    (error
+     (message "ghostel: auto-download failed: %s" (error-message-string err))
+     nil)))
+
+(defun ghostel--package-version ()
+  "Return ghostel package version string, or nil."
+  (let ((pkg (and (fboundp 'package-desc-version)
+                  (car (alist-get 'ghostel package-alist)))))
+    (when pkg
+      (package-version-join (package-desc-version pkg)))))
+
+(defun ghostel--download-file (url dest)
+  "Download URL to DEST.  Return non-nil on success."
+  (condition-case nil
+      (let ((url-request-method "GET")
+            (url-show-status nil))
+        (with-current-buffer (url-retrieve-synchronously url t t 30)
+          (set-buffer-multibyte nil)
+          (goto-char (point-min))
+          (when (re-search-forward "^HTTP/[0-9.]+ 200" nil t)
+            (when (re-search-forward "\r?\n\r?\n" nil t)
+              (let ((coding-system-for-write 'binary)
+                    (start (point)))
+                (when (< start (point-max))
+                  (write-region start (point-max) dest nil 'silent)
+                  ;; Make executable on Unix
+                  (set-file-modes dest #o755)
+                  t))))))
+    (error nil)))
+
+(defun ghostel-download-module ()
+  "Interactively download the pre-built native module for this platform."
+  (interactive)
+  (let* ((dir (file-name-directory (or load-file-name
+                                       (locate-library "ghostel")
+                                       buffer-file-name)))
+         (mod (expand-file-name
+               (concat "ghostel-module" module-file-suffix) dir)))
+    (if (file-exists-p mod)
+        (if (yes-or-no-p "Module already exists.  Re-download? ")
+            (progn
+              (ghostel--maybe-download-module dir)
+              (when (file-exists-p mod)
+                (module-load mod)
+                (message "ghostel: module loaded successfully")))
+          (message "Cancelled."))
+      (ghostel--maybe-download-module dir)
+      (if (file-exists-p mod)
+          (progn
+            (module-load mod)
+            (message "ghostel: module loaded successfully"))
+        (user-error "Download failed.  Run ./build.sh to build from source")))))
+
+(defun ghostel-module-compile ()
+  "Build the native module from source using build.sh."
+  (interactive)
+  (let ((default-directory (file-name-directory
+                            (or load-file-name
+                                (locate-library "ghostel")
+                                buffer-file-name))))
+    (compile "./build.sh")))
+
 ;; Load the native module
 (unless (featurep 'ghostel-module)
-  (let ((mod (expand-file-name
-              (concat "ghostel-module" module-file-suffix)
-              (file-name-directory (or load-file-name buffer-file-name)))))
-    (when (file-exists-p mod)
-      (module-load mod))))
+  (let* ((dir (file-name-directory (or load-file-name buffer-file-name)))
+         (mod (expand-file-name
+               (concat "ghostel-module" module-file-suffix) dir)))
+    (unless (file-exists-p mod)
+      (ghostel--maybe-download-module dir))
+    (if (file-exists-p mod)
+        (module-load mod)
+      (display-warning 'ghostel
+                       (concat "Native module not found: " mod
+                               "\nRun ./build.sh or M-x ghostel-download-module")))))
 
 ;; Declare native module functions for the byte compiler
 (declare-function ghostel--new "ghostel-module")

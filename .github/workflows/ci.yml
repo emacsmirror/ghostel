@@ -72,7 +72,17 @@ jobs:
             -f ghostel-test-run-elisp
 
   build-native:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: x86_64-linux
+            suffix: .so
+          - os: macos-latest
+            platform: aarch64-macos
+            suffix: .dylib
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,4 +94,10 @@ jobs:
           version: 0.14.1
 
       - name: Build native module
-        run: zig build
+        run: ./build.sh
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostel-module-${{ matrix.platform }}
+          path: ghostel-module${{ matrix.suffix }}
