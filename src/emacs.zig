@@ -291,6 +291,7 @@ pub const Sym = struct {
     highlight: Value,
     keymap: Value,
     @"ghostel-wrap": Value,
+    @"ghostel-prompt": Value,
 
     // Ghostel symbols
     @"ghostel-link-map": Value,

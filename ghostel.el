@@ -174,14 +174,6 @@ shell configuration files.  Supports bash, zsh, and fish."
   :type 'boolean
   :group 'ghostel)
 
-(defcustom ghostel-prompt-reapply-on-redraw nil
-  "Re-apply prompt markers after a full terminal redraw.
-When non-nil, OSC 133 prompt positions are re-applied to the buffer
-after a full redraw (triggered by resize or clear).  This preserves
-prompt navigation across redraws at the cost of a small post-redraw
-pass.  When nil, prompt markers are lost on full redraws."
-  :type 'boolean
-  :group 'ghostel)
 
 (defcustom ghostel-keymap-exceptions
   '("C-c" "C-x" "C-u" "C-h" "C-g" "M-x" "M-o" "M-:" "C-\\")
@@ -332,8 +324,6 @@ These keys pass through to Emacs instead."
   "List of prompt positions as (buffer-line . exit-status) pairs.
 Used for prompt navigation and optional re-application after full redraws.")
 
-(defvar-local ghostel--last-prompt-start nil
-  "Buffer position of the most recent OSC 133;A (prompt start).")
 
 (defvar ghostel--buffer-counter 0
   "Counter for generating unique terminal buffer names.")
@@ -924,75 +914,97 @@ Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
 (defun ghostel--osc133-marker (type param)
   "Handle an OSC 133 semantic prompt marker from the Zig module.
 TYPE is a single character string: A, B, C, or D.
-PARAM is the exit status string for type D, or nil."
+PARAM is the exit status string for type D, or nil.
+Note: the `ghostel-prompt' text property is applied by the native
+render loop (which queries libghostty's per-row semantic state),
+not here.  This handler only tracks prompt positions and exit status."
   (pcase type
     ("A"
-     ;; Prompt start — record position and line number.
-     (setq ghostel--last-prompt-start (point-max))
+     ;; Prompt start — record line number.
      (push (cons (count-lines (point-min) (point-max)) nil)
            ghostel--prompt-positions))
-    ("B"
-     ;; Prompt end / command start — apply text property.
-     (when ghostel--last-prompt-start
-       (let ((inhibit-read-only t))
-         (put-text-property ghostel--last-prompt-start (point-max)
-                            'ghostel-prompt t))
-       (setq ghostel--last-prompt-start nil)))
     ("D"
      ;; Command finished — store exit status on the most recent entry.
      (when (and ghostel--prompt-positions param)
        (setcdr (car ghostel--prompt-positions)
                (string-to-number param))))))
 
-(defun ghostel--reapply-prompt-properties ()
-  "Re-apply `ghostel-prompt' text properties from stored positions.
-Called after a full redraw when `ghostel-prompt-reapply-on-redraw' is non-nil."
-  (when ghostel--prompt-positions
-    (save-excursion
-      (let ((inhibit-read-only t))
-        (dolist (entry ghostel--prompt-positions)
-          (let ((line (car entry)))
-            (goto-char (point-min))
-            (when (zerop (forward-line line))
-              (let ((bol (line-beginning-position))
-                    (eol (line-end-position)))
-                (when (< bol eol)
-                  (put-text-property bol eol 'ghostel-prompt t))))))))))
+(defun ghostel--prompt-input-start ()
+  "From the start of a prompt line, move past the prompt marker to user input.
+Skips to end of line, then backs up past trailing whitespace to find
+the last non-whitespace+whitespace boundary (e.g. after `$ ' or `# ')."
+  (let ((bol (point)))
+    (end-of-line)
+    (skip-chars-backward " \t" bol)       ; skip trailing padding
+    (skip-chars-backward "^ \t" bol)      ; skip last word (user input)
+    (when (> (point) bol)
+      (skip-chars-backward " \t" bol)     ; skip space before user input
+      (skip-chars-forward " \t"           ; move forward past that space
+                          (line-end-position)))
+    ;; If we landed on the last visible char (no command follows),
+    ;; step past it and the trailing space (e.g. "# " → past both).
+    (when (looking-at-p "\\S-\\s-*$")
+      (forward-char 2))))
 
-(defun ghostel-next-prompt (&optional n)
-  "Move to the Nth next prompt.
-With prefix argument N, skip forward N prompts."
-  (interactive "p")
+(defun ghostel--navigate-next-prompt (&optional n)
+  "Move point to the start of the Nth next prompt region."
   (let ((pos (point)))
     (dotimes (_ (or n 1))
       ;; First skip past the current prompt region if we're inside one.
       (let ((next (next-single-property-change pos 'ghostel-prompt)))
         (when next
-          ;; If we were inside a prompt, this takes us to the end of it.
-          ;; Now find the start of the next prompt region.
-          (setq pos next)
-          (unless (get-text-property pos 'ghostel-prompt)
-            (setq pos (or (next-single-property-change pos 'ghostel-prompt)
-                          pos))))))
+          (if (get-text-property next 'ghostel-prompt)
+              ;; Landed on the next prompt.
+              (setq pos next)
+            ;; In a gap — find the next prompt, or stay put.
+            (let ((found (next-single-property-change next 'ghostel-prompt)))
+              (when found
+                (setq pos found)))))))
     (when (and pos (/= pos (point)))
-      (goto-char pos))))
+      (goto-char pos)
+      (ghostel--prompt-input-start))))
 
-(defun ghostel-previous-prompt (&optional n)
-  "Move to the Nth previous prompt.
-With prefix argument N, skip backward N prompts."
-  (interactive "p")
+(defun ghostel--navigate-previous-prompt (&optional n)
+  "Move point to the start of the Nth previous prompt region."
   (let ((pos (point)))
     (dotimes (_ (or n 1))
-      ;; Move backward to find start of previous prompt region.
+      ;; If inside a prompt, first skip backward past it.
+      (when (or (get-text-property pos 'ghostel-prompt)
+                (and (= pos (point-max))
+                     (> pos (point-min))
+                     (get-text-property (1- pos) 'ghostel-prompt)))
+        (setq pos (or (previous-single-property-change pos 'ghostel-prompt)
+                      (point-min))))
+      ;; Now search backward for the previous prompt.
       (let ((prev (previous-single-property-change pos 'ghostel-prompt)))
-        (when prev
+        (cond
+         (prev
           (setq pos prev)
-          ;; If we landed at the end of a prompt, step inside it.
+          ;; If we landed at the end of a prompt, step to its start.
           (when (get-text-property (max (1- pos) (point-min)) 'ghostel-prompt)
             (setq pos (or (previous-single-property-change pos 'ghostel-prompt)
-                          pos))))))
+                          (point-min)))))
+         ;; No property change before pos, but a prompt may start at point-min.
+         ((and (> pos (point-min))
+               (get-text-property (point-min) 'ghostel-prompt))
+          (setq pos (point-min))))))
     (when (and pos (/= pos (point)))
-      (goto-char pos))))
+      (goto-char pos)
+      (ghostel--prompt-input-start))))
+
+(defun ghostel-next-prompt (&optional n)
+  "Enter copy mode and move to the Nth next prompt."
+  (interactive "p")
+  (unless ghostel--copy-mode-active
+    (ghostel-copy-mode))
+  (ghostel--navigate-next-prompt n))
+
+(defun ghostel-previous-prompt (&optional n)
+  "Enter copy mode and move to the Nth previous prompt."
+  (interactive "p")
+  (unless ghostel--copy-mode-active
+    (ghostel-copy-mode))
+  (ghostel--navigate-previous-prompt n))
 
 ;;; Callbacks from native module
 
@@ -1253,9 +1265,7 @@ PROCESS is the shell process, EVENT describes the state change."
           (let ((inhibit-read-only t)
                 (inhibit-redisplay t)
                 (inhibit-modification-hooks t))
-            (ghostel--redraw ghostel--term)
-            (when ghostel-prompt-reapply-on-redraw
-              (ghostel--reapply-prompt-properties))))))))
+            (ghostel--redraw ghostel--term)))))))
 
 (defun ghostel-force-redraw ()
   "Force a full terminal redraw (for debugging)."
@@ -1308,9 +1318,7 @@ PROCESS is the shell, HEIGHT and WIDTH the final dimensions."
         (let ((inhibit-read-only t)
               (inhibit-redisplay t)
               (inhibit-modification-hooks t))
-          (ghostel--redraw ghostel--term)
-          (when ghostel-prompt-reapply-on-redraw
-            (ghostel--reapply-prompt-properties)))))))
+          (ghostel--redraw ghostel--term))))))
 
 ;;; Major mode
 

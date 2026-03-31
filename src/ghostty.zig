@@ -79,6 +79,7 @@ pub const RS_ROW_DATA_CELLS = c.GHOSTTY_RENDER_STATE_ROW_DATA_CELLS;
 
 // Raw row data constants (from screen API, via ROW_DATA_RAW)
 pub const ROW_DATA_WRAP = c.GHOSTTY_ROW_DATA_WRAP;
+pub const ROW_DATA_SEMANTIC_PROMPT = c.GHOSTTY_ROW_DATA_SEMANTIC_PROMPT;
 
 // Render state row cells data constants
 pub const RS_CELLS_DATA_STYLE = c.GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE;

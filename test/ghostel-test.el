@@ -849,8 +849,7 @@
         (with-current-buffer buf
           (let* ((term (ghostel--new 5 40 100))
                  (inhibit-read-only t)
-                 (ghostel--prompt-positions nil)
-                 (ghostel--last-prompt-start nil))
+                 (ghostel--prompt-positions nil))
             ;; Simulate a prompt: A, prompt text, B, command, output, D
             (ghostel--write-input term "\e]133;A\e\\")
             (ghostel--write-input term "$ ")
@@ -866,6 +865,12 @@
             (let ((prompt-pos (text-property-any (point-min) (point-max)
                                                  'ghostel-prompt t)))
               (ghostel-test--assert "ghostel-prompt property set" prompt-pos))
+
+            ;; Property should survive a full redraw (applied by render loop)
+            (ghostel--redraw term)
+            (let ((prompt-pos2 (text-property-any (point-min) (point-max)
+                                                  'ghostel-prompt t)))
+              (ghostel-test--assert "ghostel-prompt survives redraw" prompt-pos2))
 
             ;; Check prompt-positions list was populated
             (ghostel-test--assert "prompt-positions has entry"
@@ -886,48 +891,56 @@
   "Test next/previous prompt navigation."
   (message "--- prompt navigation ---")
   (with-temp-buffer
-    ;; Set up a buffer simulating terminal output with prompt markers
-    (insert "$ cmd1\n")
-    (put-text-property 1 7 'ghostel-prompt t)
+    ;; Realistic layout: property covers WHOLE row (row-level fallback),
+    ;; prompt text is "my-prompt # " followed by user command.
+    ;; Row 1: "my-prompt # cmd1\n" — property on entire row
+    (let ((p1 (point)))
+      (insert "my-prompt # cmd1\n")
+      (put-text-property p1 (1- (point)) 'ghostel-prompt t))
     (insert "output1\n")
-    (insert "$ cmd2\n")
-    (let ((p2-start (- (point) 6)))
-      (put-text-property p2-start (+ p2-start 6) 'ghostel-prompt t))
+    ;; Row 3: "my-prompt # cmd2\n"
+    (let ((p2 (point)))
+      (insert "my-prompt # cmd2\n")
+      (put-text-property p2 (1- (point)) 'ghostel-prompt t))
     (insert "output2\n")
-    (insert "$ cmd3\n")
-    (let ((p3-start (- (point) 6)))
-      (put-text-property p3-start (+ p3-start 6) 'ghostel-prompt t))
+    ;; Row 5: "my-prompt # cmd3\n"
+    (let ((p3 (point)))
+      (insert "my-prompt # cmd3\n")
+      (put-text-property p3 (1- (point)) 'ghostel-prompt t))
     (insert "output3\n")
 
-    ;; Start at beginning
+    ;; Start at beginning — we're in prompt 1
     (goto-char (point-min))
 
-    ;; Next prompt should skip to second prompt (we're in the first)
-    (ghostel-next-prompt 1)
-    (let ((pos (point)))
-      (ghostel-test--assert "next-prompt moves forward"
-                            (> pos (point-min)))
-      ;; Should not be on the first prompt anymore
-      (ghostel-test--assert "past first prompt"
-                            (> pos 8)))
+    ;; Next prompt should land on user input of prompt 2
+    (ghostel--navigate-next-prompt 1)
+    (ghostel-test--assert "next-prompt lands on cmd2"
+                          (looking-at "cmd2"))
 
-    ;; Next prompt again
-    (let ((before (point)))
-      (ghostel-next-prompt 1)
-      (ghostel-test--assert "next-prompt moves further"
-                            (> (point) before)))
+    ;; Next prompt again — should land on user input of prompt 3
+    (ghostel--navigate-next-prompt 1)
+    (ghostel-test--assert "next-prompt lands on cmd3"
+                          (looking-at "cmd3"))
 
-    ;; Previous prompt should go back
-    (let ((before (point)))
-      (ghostel-previous-prompt 1)
-      (ghostel-test--assert "previous-prompt moves backward"
-                            (< (point) before)))
+    ;; Previous prompt should land on user input of prompt 2
+    (ghostel--navigate-previous-prompt 1)
+    (ghostel-test--assert "previous-prompt lands on cmd2"
+                          (looking-at "cmd2"))
 
-    ;; From end, previous should find a prompt
+    ;; From end, previous should land on user input of prompt 3
     (goto-char (point-max))
-    (ghostel-previous-prompt 1)
-    (ghostel-test--assert "previous from end finds prompt"
-                          (< (point) (point-max)))))
+    (ghostel--navigate-previous-prompt 1)
+    (ghostel-test--assert "previous from end lands on cmd3"
+                          (looking-at "cmd3"))
+
+    ;; From inside a prompt, previous should skip to the prior prompt
+    (goto-char (point-min))
+    (ghostel--navigate-next-prompt 1)       ; prompt 2
+    (ghostel--navigate-next-prompt 1)       ; prompt 3
+    (forward-char 1)                       ; inside prompt 3's command
+    (ghostel--navigate-previous-prompt 1)
+    (ghostel-test--assert "previous from inside prompt lands on cmd2"
+                          (looking-at "cmd2"))))
 
 ;; -----------------------------------------------------------------------
 ;; Test: resize during sync output (alt screen)

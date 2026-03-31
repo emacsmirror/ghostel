@@ -467,10 +467,24 @@ fn isRowWrapped(term: *Terminal) bool {
     return wrapped;
 }
 
+/// Check if the current row in the iterator is a semantic prompt.
+fn isRowPrompt(term: *Terminal) bool {
+    var raw_row: gt.c.GhosttyRow = undefined;
+    if (gt.c.ghostty_render_state_row_get(term.row_iterator, gt.c.GHOSTTY_RENDER_STATE_ROW_DATA_RAW, @ptrCast(&raw_row)) != gt.SUCCESS) {
+        return false;
+    }
+    var semantic: c_int = 0;
+    _ = gt.c.ghostty_row_get(raw_row, gt.ROW_DATA_SEMANTIC_PROMPT, @ptrCast(&semantic));
+    return semantic != 0;
+}
+
 /// Result from buildRowContent: byte length for make_string, char count for properties.
 const RowContent = struct {
     byte_len: usize,
     char_len: usize,
+    /// Number of leading characters that are semantic prompt content.
+    /// Zero if the row has no prompt cells.
+    prompt_char_len: usize,
 };
 
 /// Build text content and style runs for the current row in the iterator.
@@ -483,6 +497,8 @@ fn buildRowContent(
 ) RowContent {
     var text_len: usize = 0; // byte offset
     var char_len: usize = 0; // character (codepoint) offset
+    var prompt_char_len: usize = 0; // chars that are semantic prompt
+    var in_prompt: bool = true; // track contiguous leading prompt cells
     run_count.* = 0;
     var current_style: CellStyle = .{};
     var run_start_char: usize = 0;
@@ -491,6 +507,20 @@ fn buildRowContent(
         var graphemes_len: u32 = 0;
         if (gt.c.ghostty_render_state_row_cells_get(term.row_cells, gt.RS_CELLS_DATA_GRAPHEMES_LEN, @ptrCast(&graphemes_len)) != gt.SUCCESS) {
             continue;
+        }
+
+        // Track leading prompt characters via cell-level semantic content.
+        if (in_prompt) {
+            var raw_cell: gt.c.GhosttyCell = undefined;
+            var semantic: c_int = 0; // GHOSTTY_CELL_SEMANTIC_OUTPUT
+            if (gt.c.ghostty_render_state_row_cells_get(term.row_cells, gt.c.GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, @ptrCast(&raw_cell)) == gt.SUCCESS) {
+                _ = gt.c.ghostty_cell_get(raw_cell, gt.c.GHOSTTY_CELL_DATA_SEMANTIC_CONTENT, @ptrCast(&semantic));
+            }
+            if (semantic == gt.c.GHOSTTY_CELL_SEMANTIC_PROMPT) {
+                // Will be updated below after chars are counted
+            } else {
+                in_prompt = false;
+            }
         }
 
         const cell_style = readCellStyle(term.row_cells);
@@ -517,6 +547,7 @@ fn buildRowContent(
                 text_len += 1;
                 char_len += 1;
             }
+            if (in_prompt) prompt_char_len = char_len;
             continue;
         }
 
@@ -534,6 +565,7 @@ fn buildRowContent(
             text_len += encoded_len;
             char_len += 1; // one codepoint = one Emacs character
         }
+        if (in_prompt) prompt_char_len = char_len;
     }
 
     // Close final run
@@ -546,7 +578,7 @@ fn buildRowContent(
         run_count.* += 1;
     }
 
-    return .{ .byte_len = text_len, .char_len = char_len };
+    return .{ .byte_len = text_len, .char_len = char_len, .prompt_char_len = prompt_char_len };
 }
 
 /// Insert row text and apply style runs.
@@ -671,7 +703,26 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
             const content = buildRowContent(term, &text_buf, &runs, &run_count);
 
             // Insert text and apply styles
+            const row_start = env.extractInteger(env.point());
             insertAndStyle(env, &text_buf, content, &runs, run_count, default_fg, default_bg);
+
+            // Mark prompt portion so Elisp navigation can find it
+            // Mark prompt portion (cell-level boundary), or entire row (row-level fallback).
+            if (content.prompt_char_len > 0) {
+                env.putTextProperty(
+                    env.makeInteger(row_start),
+                    env.makeInteger(row_start + @as(i64, @intCast(content.prompt_char_len))),
+                    emacs.sym.@"ghostel-prompt",
+                    env.t(),
+                );
+            } else if (isRowPrompt(term)) {
+                env.putTextProperty(
+                    env.makeInteger(row_start),
+                    env.point(),
+                    emacs.sym.@"ghostel-prompt",
+                    env.t(),
+                );
+            }
 
             // Track whether this row is soft-wrapped for the next newline
             prev_wrapped = isRowWrapped(term);
