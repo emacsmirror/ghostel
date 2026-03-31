@@ -346,7 +346,8 @@ Used for prompt navigation and optional re-application after full redraws.")
     (define-key map [remap self-insert-command] #'ghostel--self-insert)
     ;; Special keys — routed through the ghostty key encoder which
     ;; respects terminal modes and handles all modifier combinations.
-    (dolist (key '("RET" "TAB" "DEL" "<backspace>" "<escape>"
+    ;; Use angle-bracket forms so modifier prefixes compose correctly.
+    (dolist (key '("<return>" "<tab>" "<backspace>" "<escape>"
                    "<up>" "<down>" "<right>" "<left>"
                    "<home>" "<end>" "<prior>" "<next>"
                    "<deletechar>" "<insert>"
@@ -356,6 +357,12 @@ Used for prompt navigation and optional re-application after full redraws.")
       (dolist (mod '("S-" "C-" "M-" "C-S-" "M-S-" "C-M-"))
         (ignore-errors
           (define-key map (kbd (concat mod key)) #'ghostel--send-event))))
+    ;; Bare aliases for unmodified keys (RET=\r, TAB=\t, DEL=\x7f)
+    (define-key map (kbd "RET") #'ghostel--send-event)
+    (define-key map (kbd "TAB") #'ghostel--send-event)
+    (define-key map (kbd "DEL") #'ghostel--send-event)
+    ;; Emacs reports S-TAB as <backtab>
+    (define-key map (kbd "<backtab>") #'ghostel--send-event)
     ;; Control keys
     (define-key map (kbd "C-d")       (lambda () (interactive) (ghostel--send-key "\x04")))
     (define-key map (kbd "C-a")       (lambda () (interactive) (ghostel--send-key "\x01")))
@@ -526,11 +533,23 @@ modes (application cursor keys, Kitty keyboard protocol, etc.)."
          (base (event-basic-type event))
          (mods (event-modifiers event))
          (key-name (cond
+                    ;; backtab is Emacs's name for S-TAB
+                    ((eq base 'backtab) "tab")
+                    ;; Integer base (character key)
                     ((integerp base)
                      (and (< base 128) (string base)))
                     ((eq base 'deletechar) "delete")
-                    ((symbolp base) (symbol-name base))
+                    ;; Normal function key symbol
+                    ((and base (symbolp base)) (symbol-name base))
+                    ;; Modified return/tab/backspace/escape: event-basic-type
+                    ;; returns nil but modifiers are extracted correctly.
+                    ;; Strip modifier prefixes from the symbol name.
+                    ((and (null base) (symbolp event))
+                     (replace-regexp-in-string
+                      "\\`\\(?:[CMSHs]-\\)*" "" (symbol-name event)))
                     (t nil)))
+         ;; backtab needs shift added back since it's baked into the name
+         (mods (if (eq base 'backtab) (cons 'shift mods) mods))
          (mod-str (mapconcat
                    (lambda (m)
                      (pcase m

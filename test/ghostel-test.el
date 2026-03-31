@@ -313,6 +313,70 @@
   (ghostel-test--assert-equal "control" 4 (ghostel--modifier-number "control")))
 
 ;; -----------------------------------------------------------------------
+;; Test: send-event key extraction
+;; -----------------------------------------------------------------------
+
+(defun ghostel-test-send-event ()
+  "Test that ghostel--send-event extracts key names and modifiers correctly."
+  (message "--- send-event key extraction ---")
+  (let (captured-key captured-mods)
+    (cl-letf (((symbol-function 'ghostel--send-encoded)
+               (lambda (key mods &optional _utf8)
+                 (setq captured-key key captured-mods mods))))
+      ;; Helper to simulate a key event
+      (cl-flet ((sim (event expected-key expected-mods)
+                  (setq captured-key nil captured-mods nil)
+                  (let ((last-command-event event))
+                    (ghostel--send-event))
+                  (ghostel-test--assert-equal
+                   (format "%S key" event) expected-key captured-key)
+                  (ghostel-test--assert-equal
+                   (format "%S mods" event) expected-mods captured-mods)))
+        ;; Unmodified special keys
+        (sim (aref (kbd "<return>") 0)    "return"    "")
+        (sim (aref (kbd "<tab>") 0)       "tab"       "")
+        (sim (aref (kbd "<backspace>") 0) "backspace" "")
+        (sim (aref (kbd "<escape>") 0)    "escape"    "")
+        (sim (aref (kbd "<up>") 0)        "up"        "")
+        (sim (aref (kbd "<f1>") 0)        "f1"        "")
+        (sim (aref (kbd "<deletechar>") 0) "delete"   "")
+        ;; Modified special keys
+        (sim (aref (kbd "S-<return>") 0)  "return"    "shift")
+        (sim (aref (kbd "C-<return>") 0)  "return"    "ctrl")
+        (sim (aref (kbd "M-<return>") 0)  "return"    "meta")
+        (sim (aref (kbd "C-<up>") 0)      "up"        "ctrl")
+        (sim (aref (kbd "M-<left>") 0)    "left"      "meta")
+        (sim (aref (kbd "S-<f5>") 0)      "f5"        "shift")
+        (sim (aref (kbd "C-S-<return>") 0) "return"   "ctrl,shift")
+        ;; backtab (Emacs's name for S-TAB)
+        (sim (aref (kbd "<backtab>") 0)   "tab"       "shift")))))
+
+;; -----------------------------------------------------------------------
+;; Test: modified special keys in raw fallback
+;; -----------------------------------------------------------------------
+
+(defun ghostel-test-raw-key-modified-specials ()
+  "Test raw fallback produces CSI u encoding for modified specials."
+  (message "--- raw modified specials ---")
+  ;; Shift+return → CSI 13;2u
+  (ghostel-test--assert-equal "shift-return" "\e[13;2u"
+                              (ghostel--raw-key-sequence "return" "shift"))
+  ;; Ctrl+tab → CSI 9;5u
+  (ghostel-test--assert-equal "ctrl-tab" "\e[9;5u"
+                              (ghostel--raw-key-sequence "tab" "ctrl"))
+  ;; Meta+backspace → CSI 127;3u
+  (ghostel-test--assert-equal "meta-backspace" "\e[127;3u"
+                              (ghostel--raw-key-sequence "backspace" "meta"))
+  ;; Ctrl+shift+escape → CSI 27;6u
+  (ghostel-test--assert-equal "ctrl-shift-escape" "\e[27;6u"
+                              (ghostel--raw-key-sequence "escape" "shift,ctrl"))
+  ;; Unmodified still produce raw bytes
+  (ghostel-test--assert-equal "plain return" "\r"
+                              (ghostel--raw-key-sequence "return" ""))
+  (ghostel-test--assert-equal "plain tab" "\t"
+                              (ghostel--raw-key-sequence "tab" "")))
+
+;; -----------------------------------------------------------------------
 ;; Test: shell process integration
 ;; -----------------------------------------------------------------------
 
@@ -929,6 +993,8 @@
   ;; Pure Elisp tests (no native module needed for these)
   (ghostel-test-raw-key-sequences)
   (ghostel-test-modifier-number)
+  (ghostel-test-send-event)
+  (ghostel-test-raw-key-modified-specials)
   (ghostel-test-update-directory)
   (ghostel-test-filter-soft-wraps)
 
