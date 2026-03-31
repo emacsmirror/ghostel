@@ -140,6 +140,11 @@ pub fn setColorPalette(self: *Self, palette: *const [256]gt.ColorRgb) !void {
     try self.terminalSet(gt.OPT_COLOR_PALETTE, palette);
 }
 
+/// Set the terminal's working directory (from OSC 7).
+pub fn setPwd(self: *Self, pwd: *const gt.GhosttyString) !void {
+    try self.terminalSet(gt.OPT_PWD, pwd);
+}
+
 /// Get the current color palette (256 entries).
 pub fn getColorPalette(self: *Self, palette: *[256]gt.ColorRgb) bool {
     return gt.c.ghostty_terminal_get(

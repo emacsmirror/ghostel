@@ -86,6 +86,15 @@
   "https://github.com/dakra/ghostel/releases"
   "Base URL for ghostel GitHub releases.")
 
+(defcustom ghostel-auto-download-module nil
+  "Automatically download a pre-built native module if missing.
+When non-nil, ghostel will attempt to download a pre-built module
+from GitHub releases on first load.  When nil (the default), the
+user must explicitly run \\[ghostel-download-module] or build from
+source with ./build.sh."
+  :type 'boolean
+  :group 'ghostel)
+
 (defun ghostel--module-platform-tag ()
   "Return platform tag for the current system, e.g. \"x86_64-linux\".
 Returns nil if the platform is not recognized."
@@ -111,10 +120,14 @@ Does nothing if the platform is unsupported or the download fails."
       (let ((asset-name (ghostel--module-asset-name)))
         (when asset-name
           (let* ((version (ghostel--package-version))
-                 (url (format "%s/download/%s/%s"
-                              ghostel-github-release-url
-                              (if version (concat "v" version) "latest")
-                              asset-name))
+                 (url (if version
+                          (format "%s/download/v%s/%s"
+                                  ghostel-github-release-url
+                                  version
+                                  asset-name)
+                        (format "%s/latest/download/%s"
+                                ghostel-github-release-url
+                                asset-name)))
                  (dest (expand-file-name
                         (concat "ghostel-module" module-file-suffix) dir)))
             (message "ghostel: downloading native module from %s..." url)
@@ -136,18 +149,23 @@ Does nothing if the platform is unsupported or the download fails."
   (condition-case nil
       (let ((url-request-method "GET")
             (url-show-status nil))
-        (with-current-buffer (url-retrieve-synchronously url t t 30)
-          (set-buffer-multibyte nil)
-          (goto-char (point-min))
-          (when (re-search-forward "^HTTP/[0-9.]+ 200" nil t)
-            (when (re-search-forward "\r?\n\r?\n" nil t)
-              (let ((coding-system-for-write 'binary)
-                    (start (point)))
-                (when (< start (point-max))
-                  (write-region start (point-max) dest nil 'silent)
-                  ;; Make executable on Unix
-                  (set-file-modes dest #o755)
-                  t))))))
+        (let ((buf (url-retrieve-synchronously url t t 30)))
+          (when buf
+            (unwind-protect
+                (with-current-buffer buf
+                  (set-buffer-multibyte nil)
+                  (goto-char (point-min))
+                  (when (re-search-forward "^HTTP/[0-9.]+ 200" nil t)
+                    (when (re-search-forward "\r?\n\r?\n" nil t)
+                      (let ((coding-system-for-write 'binary)
+                            (start (point)))
+                        (when (< start (point-max))
+                          (write-region start (point-max) dest nil 'silent)
+                          ;; Make executable on Unix
+                          (set-file-modes dest #o755)
+                          t)))))
+              (when (buffer-live-p buf)
+                (kill-buffer buf))))))
     (error nil)))
 
 (defun ghostel-download-module ()
@@ -173,24 +191,21 @@ Does nothing if the platform is unsupported or the download fails."
             (message "ghostel: module loaded successfully"))
         (user-error "Download failed.  Run ./build.sh to build from source")))))
 
-(defun ghostel-module-compile ()
-  "Build the native module from source using build.sh."
-  (interactive)
-  (let ((default-directory (file-name-directory
-                            (or load-file-name
-                                (locate-library "ghostel")
-                                buffer-file-name))))
-    (compile "./build.sh")))
-
 ;; Load the native module
 (unless (featurep 'ghostel-module)
   (let* ((dir (file-name-directory (or load-file-name buffer-file-name)))
          (mod (expand-file-name
                (concat "ghostel-module" module-file-suffix) dir)))
     (unless (file-exists-p mod)
-      (ghostel--maybe-download-module dir))
+      (when ghostel-auto-download-module
+        (ghostel--maybe-download-module dir)))
     (if (file-exists-p mod)
-        (module-load mod)
+        (condition-case err
+            (module-load mod)
+          (error
+           (display-warning 'ghostel
+                            (format "Failed to load native module: %s\nRun ./build.sh to rebuild"
+                                    (error-message-string err)))))
       (display-warning 'ghostel
                        (concat "Native module not found: " mod
                                "\nRun ./build.sh or M-x ghostel-download-module")))))
@@ -1457,7 +1472,7 @@ frame after idle to improve interactive responsiveness."
   (unless ghostel--redraw-timer
     (let ((delay (if (and ghostel-adaptive-fps ghostel--last-output-time)
                      (let ((idle-secs (float-time
-                                       (time-subtract nil
+                                       (time-subtract (current-time)
                                                       ghostel--last-output-time))))
                        ;; If idle for more than 100ms, use a short delay
                        ;; for snappy first-frame response.

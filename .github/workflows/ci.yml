@@ -88,6 +88,18 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Emacs headers
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y emacs-nox
+            echo "EMACS_INCLUDE_DIR=/usr/include" >> "$GITHUB_ENV"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install emacs
+            EMACS_PREFIX="$(brew --prefix emacs)"
+            echo "EMACS_INCLUDE_DIR=${EMACS_PREFIX}/include" >> "$GITHUB_ENV"
+          fi
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:

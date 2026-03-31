@@ -213,7 +213,7 @@ fn extractAndSetPwd(term: *Terminal, data: []const u8) void {
     while (scanner.next()) |match| {
         if (match.payload.len > 0) {
             const gs = gt.GhosttyString{ .ptr = match.payload.ptr, .len = match.payload.len };
-            _ = gt.c.ghostty_terminal_set(term.terminal, gt.OPT_PWD, &gs);
+            term.setPwd(&gs) catch {};
         }
     }
 }
