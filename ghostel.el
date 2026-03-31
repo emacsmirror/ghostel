@@ -86,13 +86,16 @@
   "https://github.com/dakra/ghostel/releases"
   "Base URL for ghostel GitHub releases.")
 
-(defcustom ghostel-auto-download-module nil
-  "Automatically download a pre-built native module if missing.
-When non-nil, ghostel will attempt to download a pre-built module
-from GitHub releases on first load.  When nil (the default), the
-user must explicitly run \\[ghostel-download-module] or build from
-source with ./build.sh."
-  :type 'boolean
+(defcustom ghostel-module-auto-install 'ask
+  "What to do when the native module is missing at load time.
+\\=`ask'      — prompt with a choice to download, compile, or skip (default).
+\\=`download' — download a pre-built binary from GitHub releases.
+\\=`compile'  — build from source via `ghostel-module-compile'.
+nil         — do nothing; the user must install the module manually."
+  :type '(choice (const :tag "Ask interactively" ask)
+                 (const :tag "Download pre-built binary" download)
+                 (const :tag "Compile from source" compile)
+                 (const :tag "Do nothing" nil))
   :group 'ghostel)
 
 (defun ghostel--module-platform-tag ()
@@ -112,33 +115,82 @@ Returns nil if the platform is not recognized."
     (when tag
       (format "ghostel-module-%s%s" tag module-file-suffix))))
 
-(defun ghostel--maybe-download-module (dir)
-  "Try to download a pre-built module into DIR if available.
-Downloads from the latest GitHub release matching the current platform.
-Does nothing if the platform is unsupported or the download fails."
+(defun ghostel--module-download-url ()
+  "Return the download URL for the current platform's pre-built module."
+  (let ((asset-name (ghostel--module-asset-name)))
+    (when asset-name
+      (let ((version (ghostel--package-version)))
+        (if version
+            (format "%s/download/v%s/%s"
+                    ghostel-github-release-url version asset-name)
+          (format "%s/latest/download/%s"
+                  ghostel-github-release-url asset-name))))))
+
+(defun ghostel--download-module (dir)
+  "Download a pre-built module into DIR.
+Returns non-nil on success."
   (condition-case err
-      (let ((asset-name (ghostel--module-asset-name)))
-        (when asset-name
-          (let* ((version (ghostel--package-version))
-                 (url (if version
-                          (format "%s/download/v%s/%s"
-                                  ghostel-github-release-url
-                                  version
-                                  asset-name)
-                        (format "%s/latest/download/%s"
-                                ghostel-github-release-url
-                                asset-name)))
-                 (dest (expand-file-name
-                        (concat "ghostel-module" module-file-suffix) dir)))
-            ;; Enforce HTTPS for security
-            (unless (string-prefix-p "https://" url)
-              (error "Refusing non-HTTPS download URL: %s" url))
+      (let ((url (ghostel--module-download-url)))
+        (when url
+          (unless (string-prefix-p "https://" url)
+            (error "Refusing non-HTTPS download URL: %s" url))
+          (let ((dest (expand-file-name
+                       (concat "ghostel-module" module-file-suffix) dir)))
             (message "ghostel: downloading native module from %s..." url)
             (when (ghostel--download-file url dest)
-              (message "ghostel: native module downloaded to %s" dest)))))
+              (message "ghostel: native module downloaded successfully")
+              t))))
     (error
-     (message "ghostel: auto-download failed: %s" (error-message-string err))
+     (message "ghostel: download failed: %s" (error-message-string err))
      nil)))
+
+(defun ghostel--compile-module (dir)
+  "Compile the native module from source in DIR.
+Runs synchronously and returns non-nil on success."
+  (let ((default-directory dir)
+        (script (expand-file-name "build.sh" dir)))
+    (if (file-executable-p script)
+        (progn
+          (message "ghostel: compiling native module (this may take a moment)...")
+          (let ((ret (call-process script nil "*ghostel-build*" nil)))
+            (if (eq ret 0)
+                (progn (message "ghostel: native module compiled successfully") t)
+              (display-warning 'ghostel
+                               "Module compilation failed.  See *ghostel-build* buffer for details.")
+              nil)))
+      (display-warning 'ghostel
+                       (format "build.sh not found in %s.\nClone with submodules and run ./build.sh manually." dir))
+      nil)))
+
+(defun ghostel--ensure-module (dir)
+  "Ensure the native module exists in DIR.
+Behavior is controlled by `ghostel-module-auto-install'."
+  (let ((action ghostel-module-auto-install))
+    (when (eq action 'ask)
+      (setq action (ghostel--ask-install-action dir)))
+    (pcase action
+      ('download (ghostel--download-module dir))
+      ('compile  (ghostel--compile-module dir))
+      (_         nil))))
+
+(defun ghostel--ask-install-action (dir)
+  "Prompt the user to choose how to install the missing native module.
+DIR is the target directory.  Returns \\='download, \\='compile, or nil."
+  (let* ((url (or (ghostel--module-download-url) "GitHub releases"))
+         (choice (read-char-choice
+                  (format "Ghostel native module not found.
+
+  [d] Download pre-built binary from:
+      %s
+  [c] Compile from source (requires Zig)
+  [s] Skip — install manually later
+
+Choice: " url)
+                  '(?d ?c ?s))))
+    (pcase choice
+      (?d 'download)
+      (?c 'compile)
+      (?s nil))))
 
 (defun ghostel--package-version ()
   "Return ghostel package version string, or nil.
@@ -166,7 +218,6 @@ Returns nil without error when `package.el' is unavailable."
                             (start (point)))
                         (when (< start (point-max))
                           (write-region start (point-max) dest nil 'silent)
-                          ;; Make executable on Unix
                           (set-file-modes dest #o755)
                           t)))))
               (when (buffer-live-p buf)
@@ -181,20 +232,14 @@ Returns nil without error when `package.el' is unavailable."
                                        buffer-file-name)))
          (mod (expand-file-name
                (concat "ghostel-module" module-file-suffix) dir)))
-    (if (file-exists-p mod)
-        (if (yes-or-no-p "Module already exists.  Re-download? ")
-            (progn
-              (ghostel--maybe-download-module dir)
-              (when (file-exists-p mod)
-                (module-load mod)
-                (message "ghostel: module loaded successfully")))
-          (message "Cancelled."))
-      (ghostel--maybe-download-module dir)
-      (if (file-exists-p mod)
-          (progn
-            (module-load mod)
-            (message "ghostel: module loaded successfully"))
-        (user-error "Download failed.  Run ./build.sh to build from source")))))
+    (when (and (file-exists-p mod)
+               (not (yes-or-no-p "Module already exists.  Re-download? ")))
+      (user-error "Cancelled"))
+    (if (ghostel--download-module dir)
+        (progn
+          (module-load mod)
+          (message "ghostel: module loaded successfully"))
+      (user-error "Download failed.  Try M-x ghostel-module-compile to build from source"))))
 
 ;; Load the native module
 (unless (featurep 'ghostel-module)
@@ -202,18 +247,18 @@ Returns nil without error when `package.el' is unavailable."
          (mod (expand-file-name
                (concat "ghostel-module" module-file-suffix) dir)))
     (unless (file-exists-p mod)
-      (when ghostel-auto-download-module
-        (ghostel--maybe-download-module dir)))
+      (ghostel--ensure-module dir))
     (if (file-exists-p mod)
         (condition-case err
             (module-load mod)
           (error
            (display-warning 'ghostel
-                            (format "Failed to load native module: %s\nRun ./build.sh to rebuild"
+                            (format "Failed to load native module: %s\nTry M-x ghostel-module-compile to rebuild"
                                     (error-message-string err)))))
-      (display-warning 'ghostel
-                       (concat "Native module not found: " mod
-                               "\nRun ./build.sh or M-x ghostel-download-module")))))
+      (unless ghostel-module-auto-install
+        (display-warning 'ghostel
+                         (concat "Native module not found: " mod
+                                 "\nRun M-x ghostel-download-module or M-x ghostel-module-compile"))))))
 
 ;; Declare native module functions for the byte compiler
 (declare-function ghostel--new "ghostel-module")
