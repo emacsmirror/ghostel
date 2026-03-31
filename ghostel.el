@@ -99,6 +99,7 @@
 (declare-function ghostel--mouse-event "ghostel-module")
 (declare-function ghostel--focus-event "ghostel-module")
 (declare-function ghostel--set-palette "ghostel-module")
+(declare-function ghostel--mode-enabled "ghostel-module")
 
 ;;; Customization
 
@@ -577,8 +578,8 @@ Returns the sequence string, or nil for unknown keys."
 
 (defun ghostel--bracketed-paste-p ()
   "Return non-nil if the terminal has bracketed paste mode (2004) enabled."
-  (and ghostel--terminal
-       (ghostel--mode-enabled ghostel--terminal 2004)))
+  (and ghostel--term
+       (ghostel--mode-enabled ghostel--term 2004)))
 
 (defun ghostel--paste-text (text)
   "Send TEXT to the terminal, using bracketed paste if the terminal wants it."

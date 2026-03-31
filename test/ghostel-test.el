@@ -459,8 +459,7 @@
 (defun ghostel-test-focus-events ()
   "Test that focus events are only sent when mode 1004 is enabled."
   (message "--- focus events ---")
-  (let ((term (ghostel--new 25 80 1000))
-        (ghostel--flush-output-data nil))
+  (let ((term (ghostel--new 25 80 1000)))
     ;; Without mode 1004 enabled, focus-event should return nil (not sent)
     (ghostel-test--assert-equal "focus ignored without mode 1004"
                                 nil
