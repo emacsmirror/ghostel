@@ -337,13 +337,18 @@ Used for prompt navigation and optional re-application after full redraws.")
   (let ((map (make-sparse-keymap)))
     ;; Self-insert characters
     (define-key map [remap self-insert-command] #'ghostel--self-insert)
-    ;; Special keys — send raw bytes + local echo where applicable.
-    ;; Local echo is needed because bash's readline output is buffered
-    ;; and doesn't reach the process filter until a newline flush.
-    (define-key map (kbd "RET")       #'ghostel--send-return)
-    (define-key map (kbd "TAB")       (lambda () (interactive) (ghostel--send-key "\t")))
-    (define-key map (kbd "DEL")       #'ghostel--send-backspace)
-    (define-key map (kbd "<backspace>") #'ghostel--send-backspace)
+    ;; Special keys — routed through the ghostty key encoder which
+    ;; respects terminal modes and handles all modifier combinations.
+    (dolist (key '("RET" "TAB" "DEL" "<backspace>" "<escape>"
+                   "<up>" "<down>" "<right>" "<left>"
+                   "<home>" "<end>" "<prior>" "<next>"
+                   "<deletechar>" "<insert>"
+                   "<f1>" "<f2>" "<f3>" "<f4>" "<f5>" "<f6>"
+                   "<f7>" "<f8>" "<f9>" "<f10>" "<f11>" "<f12>"))
+      (define-key map (kbd key) #'ghostel--send-event)
+      (dolist (mod '("S-" "C-" "M-" "C-S-" "M-S-" "C-M-"))
+        (ignore-errors
+          (define-key map (kbd (concat mod key)) #'ghostel--send-event))))
     ;; Control keys
     (define-key map (kbd "C-d")       (lambda () (interactive) (ghostel--send-key "\x04")))
     (define-key map (kbd "C-a")       (lambda () (interactive) (ghostel--send-key "\x01")))
@@ -369,36 +374,6 @@ Used for prompt navigation and optional re-application after full redraws.")
     ;; Prompt navigation (OSC 133)
     (define-key map (kbd "C-c C-n")   #'ghostel-next-prompt)
     (define-key map (kbd "C-c C-p")   #'ghostel-previous-prompt)
-    ;; Cursor and navigation keys — raw escape sequences
-    (define-key map (kbd "<escape>")  (lambda () (interactive) (ghostel--send-key "\e")))
-    (define-key map (kbd "<up>")      (lambda () (interactive) (ghostel--send-key "\e[A")))
-    (define-key map (kbd "<down>")    (lambda () (interactive) (ghostel--send-key "\e[B")))
-    (define-key map (kbd "<right>")   (lambda () (interactive) (ghostel--send-key "\e[C")))
-    (define-key map (kbd "<left>")    (lambda () (interactive) (ghostel--send-key "\e[D")))
-    (define-key map (kbd "<home>")    (lambda () (interactive) (ghostel--send-key "\e[H")))
-    (define-key map (kbd "<end>")     (lambda () (interactive) (ghostel--send-key "\e[F")))
-    (define-key map (kbd "<prior>")   (lambda () (interactive) (ghostel--send-key "\e[5~")))
-    (define-key map (kbd "<next>")    (lambda () (interactive) (ghostel--send-key "\e[6~")))
-    (define-key map (kbd "<deletechar>") (lambda () (interactive) (ghostel--send-key "\e[3~")))
-    (define-key map (kbd "<insert>")  (lambda () (interactive) (ghostel--send-key "\e[2~")))
-    ;; Function keys
-    (define-key map (kbd "<f1>")      (lambda () (interactive) (ghostel--send-key "\eOP")))
-    (define-key map (kbd "<f2>")      (lambda () (interactive) (ghostel--send-key "\eOQ")))
-    (define-key map (kbd "<f3>")      (lambda () (interactive) (ghostel--send-key "\eOR")))
-    (define-key map (kbd "<f4>")      (lambda () (interactive) (ghostel--send-key "\eOS")))
-    (define-key map (kbd "<f5>")      (lambda () (interactive) (ghostel--send-key "\e[15~")))
-    (define-key map (kbd "<f6>")      (lambda () (interactive) (ghostel--send-key "\e[17~")))
-    (define-key map (kbd "<f7>")      (lambda () (interactive) (ghostel--send-key "\e[18~")))
-    (define-key map (kbd "<f8>")      (lambda () (interactive) (ghostel--send-key "\e[19~")))
-    (define-key map (kbd "<f9>")      (lambda () (interactive) (ghostel--send-key "\e[20~")))
-    (define-key map (kbd "<f10>")     (lambda () (interactive) (ghostel--send-key "\e[21~")))
-    (define-key map (kbd "<f11>")     (lambda () (interactive) (ghostel--send-key "\e[23~")))
-    (define-key map (kbd "<f12>")     (lambda () (interactive) (ghostel--send-key "\e[24~")))
-    ;; Shifted arrow keys
-    (define-key map (kbd "S-<up>")    (lambda () (interactive) (ghostel--send-key "\e[1;2A")))
-    (define-key map (kbd "S-<down>")  (lambda () (interactive) (ghostel--send-key "\e[1;2B")))
-    (define-key map (kbd "S-<right>") (lambda () (interactive) (ghostel--send-key "\e[1;2C")))
-    (define-key map (kbd "S-<left>")  (lambda () (interactive) (ghostel--send-key "\e[1;2D")))
     ;; Mouse wheel for scrollback
     (define-key map (kbd "<mouse-4>")       #'ghostel--scroll-up)
     (define-key map (kbd "<mouse-5>")       #'ghostel--scroll-down)
@@ -471,12 +446,12 @@ Returns the sequence string, or nil for unknown keys."
            (<= ?a (aref key-name 0)) (<= (aref key-name 0) ?z)
            (> (logand mod-num 4) 0))        ; ctrl bit
       (string (- (aref key-name 0) 96)))    ; ctrl-a=1, ctrl-z=26
-     ;; Simple special keys
-     ((string= key-name "backspace") "\x7f")
-     ((string= key-name "return") "\r")
-     ((string= key-name "tab") "\t")
-     ((string= key-name "escape") "\e")
-     ((string= key-name "space") " ")
+     ;; Simple special keys (CSI u encoding for modified variants)
+     ((string= key-name "backspace") (if (> mod-num 0) (format "\e[127;%du" (1+ mod-num)) "\x7f"))
+     ((string= key-name "return")    (if (> mod-num 0) (format "\e[13;%du" (1+ mod-num)) "\r"))
+     ((string= key-name "tab")       (if (> mod-num 0) (format "\e[9;%du" (1+ mod-num)) "\t"))
+     ((string= key-name "escape")    (if (> mod-num 0) (format "\e[27;%du" (1+ mod-num)) "\e"))
+     ((string= key-name "space")     (if (> mod-num 0) (format "\e[32;%du" (1+ mod-num)) " "))
      ;; Cursor keys
      ((string= key-name "up")    (ghostel--csi-letter "A" mod-num))
      ((string= key-name "down")  (ghostel--csi-letter "B" mod-num))
@@ -534,20 +509,30 @@ Returns the sequence string, or nil for unknown keys."
                 (encode-coding-string (string char) 'utf-8))))
     (ghostel--send-key str)))
 
-(defun ghostel--send-return ()
-  "Send return to the terminal."
+(defun ghostel--send-event ()
+  "Send the current key event to the terminal via the key encoder.
+Extracts the base key name and modifiers from `last-command-event'
+and routes through the ghostty key encoder, which respects terminal
+modes (application cursor keys, Kitty keyboard protocol, etc.)."
   (interactive)
-  (ghostel--send-key "\r"))
-
-(defun ghostel--send-tab ()
-  "Send tab to the terminal."
-  (interactive)
-  (ghostel--send-key "\t"))
-
-(defun ghostel--send-backspace ()
-  "Send backspace to the terminal."
-  (interactive)
-  (ghostel--send-key "\x7f"))
+  (let* ((event last-command-event)
+         (base (event-basic-type event))
+         (mods (event-modifiers event))
+         (key-name (cond
+                    ((integerp base)
+                     (and (< base 128) (string base)))
+                    ((eq base 'deletechar) "delete")
+                    ((symbolp base) (symbol-name base))
+                    (t nil)))
+         (mod-str (mapconcat
+                   (lambda (m)
+                     (pcase m
+                       ('shift "shift") ('control "ctrl")
+                       ('meta "meta") ('hyper "hyper")
+                       ('super "super") (_ nil)))
+                   mods ",")))
+    (when key-name
+      (ghostel--send-encoded key-name mod-str))))
 
 ;;; Terminal control commands (C-c prefix)
 
