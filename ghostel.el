@@ -249,7 +249,7 @@ Returns nil without error when `package.el' is unavailable."
   (let* ((dir (file-name-directory (or load-file-name buffer-file-name)))
          (mod (expand-file-name
                (concat "ghostel-module" module-file-suffix) dir)))
-    (unless (file-exists-p mod)
+    (unless (or (file-exists-p mod) noninteractive)
       (ghostel--ensure-module dir))
     (if (file-exists-p mod)
         (condition-case err
