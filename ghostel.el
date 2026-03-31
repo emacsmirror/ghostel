@@ -84,10 +84,11 @@
 
 ;; Load the native module
 (unless (featurep 'ghostel-module)
-  (module-load
-   (expand-file-name
-    (concat "ghostel-module" module-file-suffix)
-    (file-name-directory (or load-file-name buffer-file-name)))))
+  (let ((mod (expand-file-name
+              (concat "ghostel-module" module-file-suffix)
+              (file-name-directory (or load-file-name buffer-file-name)))))
+    (when (file-exists-p mod)
+      (module-load mod))))
 
 ;; Declare native module functions for the byte compiler
 (declare-function ghostel--new "ghostel-module")
@@ -1185,8 +1186,8 @@ Falls back to \"#000000\" if the color cannot be resolved."
 ;;; Focus events
 
 (defun ghostel--focus-change ()
-  "Notify ghostel terminals in the selected frame about focus changes.
-Only sends the event if the terminal has enabled focus reporting (mode 1004)."
+  "Notify ghostel terminals in the selected frame about focus change.
+Only send the event if the terminal has enabled focus reporting (mode 1004)."
   (let ((focused (frame-focus-state)))
     (dolist (buf (buffer-list))
       (with-current-buffer buf
@@ -1364,7 +1365,7 @@ PROCESS is the shell process, EVENT describes the state change."
 ;;; Window resize
 
 (defun ghostel--window-adjust-process-window-size (process windows)
-  "Resize the terminal when the Emacs window changes size.
+  "Resize the terminal to match the new Emacs window dimensions.
 PROCESS is the shell process, WINDOWS is the list of windows."
   (let* ((window (car windows))
          (width (window-max-chars-per-line window))
