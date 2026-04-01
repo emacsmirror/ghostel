@@ -1,8 +1,11 @@
 EMACS ?= emacs
 
-.PHONY: all build check test lint byte-compile checkdoc package-lint clean
+XDG_CACHE_HOME ?= $(HOME)/.cache
+MELPAZOID_DIR  ?= $(XDG_CACHE_HOME)/melpazoid
 
-all: build byte-compile test lint
+.PHONY: all build check test lint melpazoid byte-compile clean
+
+all: build test lint
 
 build:
 	./build.sh
@@ -13,29 +16,18 @@ check:
 test:
 	$(EMACS) --batch -Q -L . -l test/ghostel-test.el -f ghostel-test-run-elisp
 
-lint: byte-compile checkdoc package-lint
+lint: melpazoid
+
+melpazoid:
+	@if [ ! -d "$(MELPAZOID_DIR)" ]; then \
+		git clone https://github.com/riscy/melpazoid.git "$(MELPAZOID_DIR)"; \
+	fi
+	RECIPE='(ghostel :fetcher github :repo "dakra/ghostel")' \
+		LOCAL_REPO=$(CURDIR) \
+		make -C "$(MELPAZOID_DIR)"
 
 byte-compile:
 	$(EMACS) --batch -Q -L . -f batch-byte-compile ghostel.el ghostel-debug.el
-
-checkdoc:
-	@output=$$($(EMACS) --batch -Q -L . \
-	  --eval "(require 'checkdoc)" \
-	  --eval "(checkdoc-file \"ghostel.el\")" 2>&1); \
-	echo "$$output"; \
-	if echo "$$output" | grep -q "Warning"; then exit 1; fi
-
-package-lint:
-	$(EMACS) --batch -Q \
-	  --eval "(progn \
-	            (require 'package) \
-	            (push '(\"melpa\" . \"https://melpa.org/packages/\") package-archives) \
-	            (package-initialize) \
-	            (package-refresh-contents) \
-	            (package-install 'package-lint))" \
-	  -L . \
-	  -f package-lint-batch-and-exit \
-	  ghostel.el
 
 clean:
 	rm -f ghostel-module.dylib ghostel-module.so
