@@ -1,0 +1,477 @@
+#+TITLE: Ghostel design decisions and comparisons
+
+* Ghostel Architecture: Language Layer Design
+** Overview
+
+Ghostel is an Emacs terminal emulator that integrates libghostty-vt (the VT
+engine from Ghostty) via a native dynamic module. The architecture has two
+distinct language layers:
+
+- *Library layer*: libghostty-vt C API -- VT parsing, rendering state, input encoding
+- *Application layer*: Zig -- Emacs module entry, terminal lifecycle, rendering, input handling
+
+This document evaluates three possible language configurations for these layers.
+
+** Current Architecture: C API libghostty + Zig Emacs Module
+
+The current design uses Zig for all application code while consuming both the
+Emacs C module API and the libghostty-vt C API through Zig's =@cImport=.
+
+*** FFI Boundaries
+
+1. *Emacs module entry* -- =emacs_module_init()= exported with =callconv(.c)=
+2. *Opaque ghostty handles* -- =Terminal=, =RenderState=, etc. passed as =*anyopaque=
+3. *Synchronous callbacks* -- ghostty calls back into Zig during =vtWrite()=, which calls into Elisp
+4. *String/data extraction* -- out-parameter pattern at boundaries (=ghostty_terminal_get=)
+
+*** Advantages
+
+- Zig's =@cImport= makes calling both C APIs trivial with no manual binding work.
+- Comptime features enable the symbol cache (=inline for= over struct fields),
+  compile-time key mapping tables, and zero-cost abstractions over the C API.
+- The =Env= wrapper, =Terminal= struct, =CellStyle= batching, and render pipeline
+  are idiomatic Zig patterns that would be verbose boilerplate in C.
+- Explicit =@ptrCast= / =@alignCast= at FFI boundaries vs C's silent =void*= casts.
+- =defer= and slices with lengths make resource cleanup and buffer handling safe.
+- Ghostty itself is Zig, so staying in the same ecosystem simplifies tracking upstream.
+- Single =build.zig= handles everything including linking static C libraries.
+
+*** Disadvantages
+
+- Two mental models: Zig idioms for application code, C calling conventions and
+  out-parameter patterns at the FFI boundary.
+- Dependent on C header stability -- if Ghostty changes its C API headers, Zig
+  code must adapt to C conventions (not Zig conventions).
+- No access to Ghostty internals -- the C API is a deliberately limited surface.
+  OSC 7 and OSC 52 are discarded by the C API, requiring manual parsing on
+  the Zig side.
+
+** Alternative: Zig for Both Layers
+
+This means importing Ghostty as a Zig dependency (its =build.zig= module) rather
+than linking =libghostty-vt.a= through the C API.
+
+*** Advantages
+
+- Direct access to Ghostty internals: no opaque handles, can reach into terminal
+  state, hook OSC handlers natively, eliminate the OSC 7/52 workaround.
+- One language, one idiom: no =callconv(.c)= on ghostty calls, no out-parameter
+  patterns, no =void*= userdata.
+- Richer type information: Ghostty's internal tagged unions, optionals, and
+  slices instead of flattened C enums and pointer+length pairs.
+- Potentially smaller binary: the C++ dependencies (simdutf, highway) are pulled
+  in by the C API shim; the Zig internal path might avoid them.
+- Unified error handling with Zig error unions everywhere instead of checking
+  ~== SUCCESS~ return codes.
+- Could use Ghostty's comptime-generated tables directly.
+
+*** Disadvantages
+
+- Tight coupling to Ghostty internals: the internal API is unstable and any
+  upstream refactor breaks us. The C API exists as a stability boundary.
+- Build complexity increases significantly: Ghostty's =build.zig= is large,
+  pulls in many dependencies, and may conflict with our build configuration.
+- Upstream may not support or welcome use of internals -- =libghostty-vt= is the
+  intended external interface.
+- Git submodule updates could break compilation in subtle ways vs the C API's
+  ABI stability.
+- The Emacs module API is still C, so =callconv(.c)= and =@cImport("emacs-module.h")=
+  remain regardless.
+
+** Alternative: C for Both Layers
+
+Pure C implementation using both the Emacs C module API and the libghostty-vt C
+API directly.
+
+*** Advantages
+
+- Maximum portability: any C compiler works, no Zig toolchain dependency.
+- Simplest mental model for external contributors: C is the lingua franca.
+- Uses both Emacs and libghostty exactly as their APIs were designed.
+- Smaller toolchain requirement: =cc= is everywhere.
+
+*** Disadvantages
+
+- Massive increase in boilerplate: the =Env= wrapper, symbol cache, style
+  batching, and render pipeline would balloon. The comptime symbol cache alone
+  becomes a hand-maintained array of =intern()= calls.
+- Manual memory management: no =defer=, no slices with lengths, no optionals.
+  Every resource cleanup path requires explicit handling. =Terminal.deinit()=
+  with its 6 deferred frees becomes nested =if= / =goto cleanup= chains.
+- No safety guarantees: silent =void*= casts, no bounds checking, buffer overrun
+  risk in the render loop.
+- Worse string handling: the render pipeline does careful UTF-8 codepoint
+  extraction with Zig slices; in C this becomes manual pointer arithmetic.
+- No comptime: the key mapping table, symbol cache, and style comparison logic
+  all benefit from compile-time evaluation; in C this requires macros or code
+  generation.
+- Build system regression: need a Makefile or CMakeLists.txt that manually
+  handles include paths, library linking, and platform differences -- all things
+  =build.zig= handles declaratively.
+
+** Comparison
+
+|-------------------------+---------------------+---------------------+--------------------|
+| Concern                 | C API + Zig (current) | Zig + Zig           | C + C              |
+|-------------------------+---------------------+---------------------+--------------------|
+| Safety                  | High                | Highest             | Low                |
+| Ghostty coupling        | Loose (C ABI)       | Tight (internal API) | Loose (C ABI)      |
+| Build complexity        | Low                 | High                | Medium             |
+| Boilerplate             | Low                 | Lowest              | Very high          |
+| Upstream compatibility  | Good                | Fragile             | Good               |
+| OSC 7/52 workaround     | Needed              | Not needed          | Needed             |
+| Contributor access      | Medium              | Medium              | High               |
+|-------------------------+---------------------+---------------------+--------------------|
+
+** Conclusion
+
+The current approach (C API + Zig) is the pragmatic sweet spot. It provides
+Zig's safety and ergonomics for the code we own while staying on Ghostty's
+supported external interface. The main pain point -- OSC 7/52 manual parsing --
+is a libghostty-vt feature gap, not an architectural flaw. If that gets resolved
+upstream, there is little reason to change the current design.
+
+* Ghostel vs Emacs-libvterm (vterm)
+** Overview
+
+Both ghostel and vterm are Emacs terminal emulators implemented as native
+dynamic modules. They share the same high-level pattern -- a C-callable shared
+library loaded by Emacs, wrapping an external VT parsing library, with an Elisp
+layer on top. The implementations diverge significantly in language choice,
+terminal engine, and design philosophy.
+
+|--------------------------+------------------------------+--------------------------|
+|                          | ghostel                      | vterm                    |
+|--------------------------+------------------------------+--------------------------|
+| Native module language   | Zig (with C calling conv.)   | C                        |
+| VT engine                | libghostty-vt (from Ghostty) | libvterm (by LeoNerd)    |
+| VT engine language       | Zig (exposed via C API)      | C99                      |
+| Build system             | build.zig                    | CMake                    |
+| Elisp layer              | ~1,200 lines                 | ~3,000+ lines            |
+| Native module            | ~2,200 lines (5 Zig files)   | ~1,800 lines (3 C files) |
+| Terminal emulation level | xterm + Kitty extensions     | VT220/xterm              |
+|--------------------------+------------------------------+--------------------------|
+
+** Terminal Engine
+
+*** libghostty-vt (ghostel)
+
+- Extracted from the Ghostty terminal emulator, a modern GPU-accelerated terminal.
+- Supports Kitty keyboard protocol, Kitty graphics protocol foundations, and
+  modern escape sequences beyond traditional xterm.
+- Provides a =RenderState= abstraction with dirty tracking (=DIRTY_FALSE=,
+  =DIRTY_PARTIAL=, =DIRTY_FULL=), row iterators, and cell iterators. The
+  rendering API is explicitly designed for external consumers.
+- Includes dedicated encoder objects for keyboard and mouse input that handle
+  protocol negotiation (legacy, Kitty, etc.) internally.
+- Exposes an HTML formatter for extracting OSC 8 hyperlinks.
+- Does not expose OSC 7 (working directory) or OSC 52 (clipboard) through the C
+  API -- these must be manually parsed from the VT stream.
+
+*** libvterm (vterm)
+
+- A standalone C99 library also used by Neovim's built-in terminal.
+- Designed for embedding: avoids =malloc()= during normal operation, uses
+  callback function pointers for all output.
+- VT220/xterm emulation with 256-color and true-color support.
+- Damage-based rendering: fires =term_damage= callbacks with invalidated
+  rectangles. The consumer is responsible for iterating =VTermScreenCell=
+  arrays within damaged regions.
+- No built-in input encoder -- the C module maps key names to =VTermKey= enums
+  and calls =vterm_keyboard_key()= / =vterm_keyboard_unichar()= directly.
+- OSC handling via a callback (=osc_callback=) that processes OSC 51 for shell
+  integration commands.
+
+*** Comparison
+
+- libghostty-vt offers a higher-level rendering API (iterators, dirty flags)
+  while libvterm provides lower-level cell access (damage rects, raw cell arrays).
+- libghostty-vt's input encoders abstract away protocol details; vterm's C module
+  must handle key-to-escape-sequence mapping manually.
+- libvterm is more mature and widely deployed (Neovim); libghostty-vt is newer
+  but benefits from Ghostty's active development and modern protocol support.
+
+** Rendering Pipeline
+
+*** ghostel
+
+1. =ghostel--redraw= calls into Zig module.
+2. =ghostty_render_state_update()= syncs render state with terminal.
+3. Dirty flag checked: =DIRTY_FALSE= skips, =DIRTY_PARTIAL= updates only dirty
+   rows in-place, =DIRTY_FULL= erases and redraws everything.
+4. Row iterator (=ghostty_render_state_row_iterator_next=) walks rows.
+5. Cell iterator (=ghostty_render_state_row_cells_next=) walks cells within rows.
+6. Cells grouped into style runs (=CellStyle= struct: fg, bg, bold, italic,
+   faint, underline with 5 types, strikethrough, inverse).
+7. UTF-8 text inserted, then =put-text-property= applies face plists.
+8. Hyperlinks: HTML formatter extracts =<a href="...">= tags from OSC 8, parsed
+   and applied as text properties. Plain-text URLs detected via Elisp regex as a
+   second pass.
+9. Cursor positioned from render state; cursor style updated (bar/block/underline/hollow).
+
+*** vterm
+
+1. libvterm fires =term_damage= callbacks marking invalidated row ranges.
+2. Invalid region tracked in =Term= struct (=invalid_start=, =invalid_end=).
+3. On redraw, =refresh_screen()= iterates only invalidated rows.
+4. =refresh_lines()= reads =VTermScreenCell= arrays, converts to UTF-8 with
+   text properties.
+5. Cells with identical attributes grouped via =compare_cells()=.
+6. Properties applied: =:foreground=, =:background=, =:weight=, =:slant=,
+   =:underline=, =:inverse-video=, =:strike-through=.
+7. No hyperlink support (OSC 8 not implemented; open issue #769).
+8. Cursor positioned via =term_movecursor= callback.
+
+*** Comparison
+
+- Both use text properties (not overlays) for styling -- same fundamental approach.
+- Both batch consecutive cells with identical styles into runs for efficiency.
+- ghostel's dirty tracking is built into the rendering API (three-level dirty
+  flag); vterm tracks damage rectangles in the C module.
+- ghostel supports partial row updates; vterm redraws entire invalidated rows.
+- ghostel has hyperlink support (OSC 8 + plain-text detection); vterm does not.
+- ghostel supports all 5 underline styles (single, double, curly, dotted, dashed)
+  with per-underline color; vterm supports basic underline only.
+
+** Redraw Scheduling
+
+Both use timer-based coalescing to avoid excessive redisplay during heavy output:
+
+- ghostel: default 0.033s (~30 fps).
+- vterm: default 0.1s (~10 fps).
+
+ghostel's faster default means more responsive interactive updates at the cost of
+slightly more CPU during heavy output. Both are configurable.
+
+** Input Handling
+
+*** ghostel
+
+- Elisp captures keystrokes, extracts key name + modifier string.
+- Zig module calls =ghostty_key_encoder_encode()= which handles protocol
+  negotiation internally (legacy xterm, Kitty keyboard protocol, etc.).
+- Mouse events encoded via =ghostty_mouse_encoder_encode()= with full SGR mouse
+  protocol support.
+- The encoder objects are stateful -- they sync options from terminal state
+  (cursor key mode, Kitty flags) before each encode.
+
+*** vterm
+
+- Elisp captures keystrokes via =vterm--translate-event-to-args=.
+- C module maps key names to =VTermKey= enums in =term_process_key()=.
+- Calls =vterm_keyboard_key()= or =vterm_keyboard_unichar()= directly.
+- No mouse protocol passthrough to the terminal -- mouse clicks move point in
+  Emacs but are not encoded as terminal mouse events. TUI applications that
+  require mouse input (e.g., htop mouse selection) do not receive mouse events.
+
+*** Comparison
+
+- ghostel delegates encoding complexity to libghostty's encoder objects; vterm
+  does manual key-to-enum mapping in C.
+- ghostel supports Kitty keyboard protocol; vterm is limited to legacy xterm
+  key encoding.
+- ghostel passes mouse events through to the terminal (full SGR mouse); vterm
+  does not, which limits TUI mouse interactivity.
+
+** Process Model
+
+Both use Emacs's =make-process= with =:connection-type 'pty= for the shell
+subprocess. Both are single-threaded, running entirely within Emacs's event loop.
+
+*** ghostel
+
+- Detects shell type and auto-injects shell integration scripts via environment
+  variables (=ENV= for bash, =ZDOTDIR= for zsh, =XDG_DATA_DIRS= for fish).
+- Sets =TERM=xterm-256color=, =COLORTERM=truecolor=, =INSIDE_EMACS=ghostel=.
+- Uses binary coding system to avoid Emacs encoding/decoding interference.
+- Enables PTY-level echo for readline input visibility.
+
+*** vterm
+
+- Runs =stty -nl sane [iutf8] rows H columns W && exec SHELL= to configure the
+  TTY before starting the shell.
+- Sets =TERM=xterm-256color=, =INSIDE_EMACS=vterm=.
+- Opens PTY device file to query terminal settings like ICRNL mode.
+- Shell integration requires users to manually source scripts in their shell RC
+  files (not auto-injected).
+
+*** Comparison
+
+- ghostel auto-injects shell integration; vterm requires manual setup.
+- vterm explicitly configures TTY line discipline via =stty=; ghostel relies on
+  default PTY settings.
+- Both set =INSIDE_EMACS= for shell-side detection.
+
+** Scrollback
+
+*** ghostel
+
+- Managed entirely by libghostty-vt.
+- Configurable via =ghostel-max-scrollback= (default 10,000).
+- Viewport scrolling via =scrollViewport(SCROLL_DELTA, n)=.
+- Scrollback content rendered through the same render state API as the visible
+  screen -- no separate code path.
+
+*** vterm
+
+- Implemented as a circular buffer of =ScrollbackLine= structs in C.
+- Each entry stores a =VTermScreenCell= array plus =LineInfo= metadata (directory,
+  prompt column).
+- =term_sb_push()= / =term_sb_pop()= manage the ring buffer.
+- Maximum cap: =SB_MAX= = 100,000 lines. Default =vterm-max-scrollback= = 1,000.
+- Scrollback rendered into the Emacs buffer above the visible terminal area via
+  =refresh_scrollback()= -- a separate code path from screen rendering.
+
+*** Comparison
+
+- ghostel's scrollback is opaque (managed by libghostty); vterm's is explicit C
+  code with per-line metadata.
+- vterm stores shell integration metadata (directory, prompt column) per
+  scrollback line, enabling prompt-to-prompt navigation in scrollback.
+- vterm has a higher maximum cap (100K vs 10K default) but both are configurable.
+- ghostel renders scrollback through the same API as the screen; vterm has a
+  separate =refresh_scrollback()= path.
+
+** Shell Integration
+
+*** ghostel
+
+- OSC 7 for working directory tracking (parsed manually from VT stream).
+- OSC 52 for clipboard (parsed manually, copied to kill ring + system clipboard).
+- Auto-injection of shell scripts via environment variables.
+- No prompt detection or prompt navigation.
+
+*** vterm
+
+- OSC 51;A for directory + prompt marker (parsed in C module, stored in =LineInfo=).
+- OSC 51;E for executing whitelisted Elisp commands from the shell (e.g.,
+  =find-file=, =message=).
+- Prompt-to-prompt navigation via =vterm-next-prompt= / =vterm-previous-prompt=
+  using =vterm-prompt= text properties.
+- Directory tracking with Tramp/remote path support (=user@host:/path= mapped to
+  Tramp syntax).
+- Requires manual shell RC file configuration.
+
+*** Comparison
+
+- vterm's shell integration is more featureful: prompt detection, Elisp command
+  execution from shell, Tramp-aware directory tracking.
+- ghostel's auto-injection is more convenient for initial setup.
+- vterm's OSC 51;E is a unique feature -- it enables commands like =vterm-clear=
+  that execute both shell-side (=clear=) and Emacs-side (scroll buffer management).
+- ghostel currently lacks prompt detection, so prompt navigation is not available.
+
+** Copy Mode
+
+Both implement a "copy mode" that freezes terminal output and enables standard
+Emacs text navigation and selection.
+
+- ghostel: =ghostel-copy-mode= freezes display, filters soft-wrapped newlines on
+  copy, strips trailing whitespace per line.
+- vterm: =vterm-copy-mode= with =vterm-copy-mode-done= to exit. Integrates with
+  =filter-buffer-substring-function= to strip fake newlines.
+
+Both handle soft-wrap markers similarly (text property on artificial newlines,
+stripped during copy).
+
+** Hyperlinks
+
+*** ghostel
+
+- OSC 8 explicit hyperlinks: extracted via HTML formatter, applied as text
+  properties (=help-echo= for URI, =mouse-face= for highlight, =keymap= for click).
+- Plain-text URL detection: Elisp regex matches =http(s)://= URLs and
+  =file:line= references.
+- URI dispatch: =file://= opens in Emacs, =fileref:path:line= opens at line,
+  =http(s)= opens in browser.
+
+*** vterm
+
+- No OSC 8 support. Open issue #769 with an incomplete implementation attempt
+  that stalled due to rendering difficulties.
+- No plain-text URL detection built in (available via external packages).
+
+** Safety and Stability
+
+*** ghostel
+
+- Zig provides memory safety at the application layer: slices with lengths,
+  =defer= for cleanup, explicit pointer casts, optional types.
+- The VT engine (libghostty-vt) is also Zig, benefiting from the same safety
+  properties.
+- A crash in the native module still takes down Emacs, but the probability of
+  memory-safety bugs is lower.
+
+*** vterm
+
+- Pure C with manual memory management throughout.
+- Scrollback uses a hand-managed circular buffer with =malloc= / =free=.
+- Known crash reports exist (segfaults in the C module).
+- The README labels the project as alpha status with API subject to change.
+- libvterm itself is well-tested (used in Neovim) but the C module layer adds
+  crash surface.
+
+** Build System
+
+*** ghostel
+
+- =build.zig= + =build.sh=. Requires Zig toolchain.
+- Links pre-built =libghostty-vt.a= (static), plus C++ dependencies (simdutf,
+  highway) and system =libc++=.
+- Ghostty vendored as a git submodule, built separately.
+- Emacs include path currently hardcoded for macOS (=/Applications/Emacs.app/...=).
+
+*** vterm
+
+- CMake 3.11+. Requires C compiler.
+- Auto-detects system libvterm or downloads and builds it from a GitHub mirror.
+- Three C source files compiled into a single shared library.
+- First-run compilation triggered automatically from Elisp if module not found.
+- Wider platform support (Linux, macOS, BSDs).
+
+*** Comparison
+
+- vterm's build is more portable and has auto-compilation from Elisp.
+- ghostel requires the Zig toolchain, which is less commonly available.
+- ghostel's dependency chain is heavier (libghostty-vt + simdutf + highway +
+  libc++) vs vterm's single dependency (libvterm, ~50KB).
+
+** Feature Comparison
+
+|-------------------------------+-----------+---------|
+| Feature                       | ghostel   | vterm   |
+|-------------------------------+-----------+---------|
+| True color (24-bit)           | Yes       | Yes     |
+| 256 colors                    | Yes       | Yes     |
+| Bold / italic / faint         | Yes       | Yes     |
+| Underline styles (5 types)    | Yes       | No      |
+| Underline color               | Yes       | No      |
+| Strikethrough                 | Yes       | Yes     |
+| Cursor styles                 | 4 types   | 3 types |
+| OSC 8 hyperlinks              | Yes       | No      |
+| Plain-text URL detection      | Yes       | No      |
+| Kitty keyboard protocol       | Yes       | No      |
+| SGR mouse passthrough         | Yes       | No      |
+| Bracketed paste               | Yes       | Yes     |
+| Alternate screen              | Yes       | Yes     |
+| Shell integration auto-inject | Yes       | No      |
+| Prompt navigation             | No        | Yes     |
+| Elisp eval from shell         | No        | Yes     |
+| Tramp-aware directory         | No        | Yes     |
+| OSC 52 clipboard              | Yes       | Yes     |
+| Copy mode                     | Yes       | Yes     |
+| Drag-and-drop                 | Yes       | No      |
+| Scrollback max (default)      | 10,000    | 1,000   |
+|-------------------------------+-----------+---------|
+
+** Summary
+
+ghostel and vterm represent different generations of the same idea. vterm is
+mature, widely deployed, and has deep shell integration (prompt navigation, Elisp
+eval, Tramp support), but is limited by C's lack of safety guarantees, libvterm's
+traditional feature set, and the absence of modern terminal protocols. ghostel is
+newer, leverages Ghostty's modern VT engine for features like Kitty keyboard
+protocol, SGR mouse, OSC 8 hyperlinks, and rich underline styles, with Zig
+providing stronger safety properties. The trade-off is a younger codebase, heavier
+build dependencies, and shell integration features that are not yet on par with
+vterm's.
