@@ -31,7 +31,7 @@ export fn emacs_module_init(runtime: *c.struct_emacs_runtime) callconv(.c) c_int
     env.bindFunction("ghostel--set-size", 3, 3, &fnSetSize, "Resize the terminal.\n\n(ghostel--set-size TERM ROWS COLS)");
     env.bindFunction("ghostel--get-title", 1, 1, &fnGetTitle, "Get the terminal title.\n\n(ghostel--get-title TERM)");
     env.bindFunction("ghostel--get-pwd", 1, 1, &fnGetPwd, "Get the terminal's working directory from OSC 7.\n\n(ghostel--get-pwd TERM)");
-    env.bindFunction("ghostel--redraw", 1, 1, &fnRedraw, "Redraw dirty regions of the terminal into the current buffer.\n\n(ghostel--redraw TERM)");
+    env.bindFunction("ghostel--redraw", 1, 2, &fnRedraw, "Redraw the terminal into the current buffer.\n\n(ghostel--redraw TERM &optional FULL)");
     env.bindFunction("ghostel--scroll", 2, 2, &fnScroll, "Scroll the terminal viewport by DELTA lines.\n\n(ghostel--scroll TERM DELTA)");
     env.bindFunction("ghostel--scroll-top", 1, 1, &fnScrollTop, "Scroll the terminal viewport to the top of scrollback.\n\n(ghostel--scroll-top TERM)");
     env.bindFunction("ghostel--scroll-bottom", 1, 1, &fnScrollBottom, "Scroll the terminal viewport to the bottom.\n\n(ghostel--scroll-bottom TERM)");
@@ -310,12 +310,14 @@ fn fnGetPwd(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*anyo
     return env.nil();
 }
 
-/// (ghostel--redraw TERM)
+/// (ghostel--redraw TERM &optional FULL)
 /// Reads the render state and updates the current Emacs buffer with styled text.
-fn fnRedraw(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*anyopaque) callconv(.c) c.emacs_value {
+/// When FULL is non-nil, always perform a full redraw instead of incremental.
+fn fnRedraw(raw_env: ?*c.emacs_env, nargs: isize, args: [*c]c.emacs_value, _: ?*anyopaque) callconv(.c) c.emacs_value {
     const env = emacs.Env.init(raw_env.?);
     const term = env.getUserPtr(Terminal, args[0]) orelse return env.nil();
-    render.redraw(env, term);
+    const force_full = nargs > 1 and env.isNotNil(args[1]);
+    render.redraw(env, term, force_full);
     return env.nil();
 }
 

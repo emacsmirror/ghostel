@@ -608,7 +608,8 @@ fn insertAndStyle(
 }
 
 /// Redraw the terminal into the current Emacs buffer.
-pub fn redraw(env: emacs.Env, term: *Terminal) void {
+/// When force_full is true, always erase and rebuild (matches Ghostty GPU behaviour).
+pub fn redraw(env: emacs.Env, term: *Terminal, force_full: bool) void {
     // Update render state from terminal
     if (gt.c.ghostty_render_state_update(term.render_state, term.terminal) != gt.SUCCESS) {
         return;
@@ -641,7 +642,8 @@ pub fn redraw(env: emacs.Env, term: *Terminal) void {
         }
 
         // Incremental redraw: only update dirty rows when possible.
-        const partial = (dirty == gt.DIRTY_PARTIAL);
+        // force_full bypasses partial mode to avoid stale rows after scrolls.
+        const partial = (!force_full and dirty == gt.DIRTY_PARTIAL);
         if (!partial) {
             env.eraseBuffer();
         }

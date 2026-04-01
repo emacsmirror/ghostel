@@ -267,7 +267,7 @@ Returns nil without error when `package.el' is unavailable."
 (declare-function ghostel--new "ghostel-module")
 (declare-function ghostel--write-input "ghostel-module")
 (declare-function ghostel--set-size "ghostel-module")
-(declare-function ghostel--redraw "ghostel-module")
+(declare-function ghostel--redraw "ghostel-module" (term &optional full))
 (declare-function ghostel--scroll "ghostel-module")
 (declare-function ghostel--encode-key "ghostel-module")
 (declare-function ghostel--mouse-event "ghostel-module")
@@ -306,6 +306,13 @@ delay between frames during sustained output."
 When non-nil, use a shorter initial delay for responsive interactive
 feedback and stop the timer entirely when idle.  When nil, use the
 fixed `ghostel-timer-delay' unconditionally."
+  :type 'boolean
+  :group 'ghostel)
+
+(defcustom ghostel-full-redraw nil
+  "When non-nil, always perform full redraws instead of incremental updates.
+Full redraws are more robust with TUI apps like Claude Code that do
+aggressive partial screen updates, but may use more CPU."
   :type 'boolean
   :group 'ghostel)
 
@@ -862,7 +869,7 @@ pasted using bracketed paste."
     (ghostel--scroll ghostel--term -3)
     (if ghostel--copy-mode-active
         (let ((inhibit-read-only t))
-          (ghostel--redraw ghostel--term))
+          (ghostel--redraw ghostel--term ghostel-full-redraw))
       (setq ghostel--force-next-redraw t)
       (ghostel--invalidate))))
 
@@ -873,7 +880,7 @@ pasted using bracketed paste."
     (ghostel--scroll ghostel--term 3)
     (if ghostel--copy-mode-active
         (let ((inhibit-read-only t))
-          (ghostel--redraw ghostel--term))
+          (ghostel--redraw ghostel--term ghostel-full-redraw))
       (setq ghostel--force-next-redraw t)
       (ghostel--invalidate))))
 
@@ -884,7 +891,7 @@ pasted using bracketed paste."
     (let ((height (count-lines (point-min) (point-max))))
       (ghostel--scroll ghostel--term (- 2 height))
       (let ((inhibit-read-only t))
-        (ghostel--redraw ghostel--term)))))
+        (ghostel--redraw ghostel--term ghostel-full-redraw)))))
 
 (defun ghostel-copy-mode-scroll-down ()
   "Scroll the terminal viewport down by a page in copy mode."
@@ -893,7 +900,7 @@ pasted using bracketed paste."
     (let ((height (count-lines (point-min) (point-max))))
       (ghostel--scroll ghostel--term (- height 2))
       (let ((inhibit-read-only t))
-        (ghostel--redraw ghostel--term)))))
+        (ghostel--redraw ghostel--term ghostel-full-redraw)))))
 
 (defun ghostel-copy-mode-previous-line ()
   "Move to the previous line, scrolling the viewport if at the top."
@@ -903,7 +910,7 @@ pasted using bracketed paste."
         (when ghostel--term
           (ghostel--scroll ghostel--term -1)
           (let ((inhibit-read-only t))
-            (ghostel--redraw ghostel--term))
+            (ghostel--redraw ghostel--term ghostel-full-redraw))
           (goto-char (point-min)))
       (forward-line -1))
     (move-to-column col)))
@@ -916,7 +923,7 @@ pasted using bracketed paste."
         (when ghostel--term
           (ghostel--scroll ghostel--term 1)
           (let ((inhibit-read-only t))
-            (ghostel--redraw ghostel--term))
+            (ghostel--redraw ghostel--term ghostel-full-redraw))
           (goto-char (point-max))
           (beginning-of-line))
       (forward-line 1))
@@ -928,7 +935,7 @@ pasted using bracketed paste."
   (when ghostel--term
     (ghostel--scroll-top ghostel--term)
     (let ((inhibit-read-only t))
-      (ghostel--redraw ghostel--term))
+      (ghostel--redraw ghostel--term ghostel-full-redraw))
     (goto-char (point-min))))
 
 (defun ghostel-copy-mode-end-of-buffer ()
@@ -937,7 +944,7 @@ pasted using bracketed paste."
   (when ghostel--term
     (ghostel--scroll-bottom ghostel--term)
     (let ((inhibit-read-only t))
-      (ghostel--redraw ghostel--term))
+      (ghostel--redraw ghostel--term ghostel-full-redraw))
     (goto-char (point-max))))
 
 (defun ghostel-copy-mode-end-of-line ()
@@ -1562,21 +1569,21 @@ frame after idle to improve interactive responsiveness."
           (let ((inhibit-read-only t)
                 (inhibit-redisplay t)
                 (inhibit-modification-hooks t))
-            (ghostel--redraw ghostel--term)
+            (ghostel--redraw ghostel--term ghostel-full-redraw)
             (ghostel--pin-window-start)))))))
 
 (defun ghostel--pin-window-start ()
   "Pin the window so terminal row 1 stays at the top."
   (let ((win (get-buffer-window)))
     (when win
-      (set-window-start win (point-min) t))))
+      (set-window-start win (point-min)))))
 
 (defun ghostel-force-redraw ()
   "Force a full terminal redraw (for debugging)."
   (interactive)
   (when ghostel--term
     (let ((inhibit-read-only t))
-      (ghostel--redraw ghostel--term)
+      (ghostel--redraw ghostel--term ghostel-full-redraw)
       (ghostel--pin-window-start))))
 
 ;;; Window resize
@@ -1623,7 +1630,7 @@ PROCESS is the shell, HEIGHT and WIDTH the final dimensions."
         (let ((inhibit-read-only t)
               (inhibit-redisplay t)
               (inhibit-modification-hooks t))
-          (ghostel--redraw ghostel--term)
+          (ghostel--redraw ghostel--term ghostel-full-redraw)
           (ghostel--pin-window-start))))))
 
 ;;; Major mode
