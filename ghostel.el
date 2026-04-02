@@ -82,12 +82,88 @@
 (require 'url-parse)
 (require 'face-remap)
 
-(declare-function package-version-join "package" (vlist))
-(declare-function package-desc-version "package" (pkg-desc))
+
+;;; Customization
 
-(defvar ghostel-github-release-url
-  "https://github.com/dakra/ghostel/releases"
-  "Base URL for ghostel GitHub releases.")
+(defgroup ghostel nil
+  "Terminal emulator powered by libghostty."
+  :group 'terminals
+  :prefix "ghostel-")
+
+(defcustom ghostel-shell (or (getenv "SHELL") "/bin/sh")
+  "Shell program to run in the terminal."
+  :type 'string)
+
+(defcustom ghostel-max-scrollback 10000
+  "Maximum number of scrollback lines."
+  :type 'integer)
+
+(defcustom ghostel-timer-delay 0.033
+  "Delay in seconds before redrawing after output (roughly 30fps).
+When `ghostel-adaptive-fps' is non-nil, this serves as the base
+delay between frames during sustained output."
+  :type 'number)
+
+(defcustom ghostel-adaptive-fps t
+  "Use adaptive frame rate for terminal redraw.
+When non-nil, use a shorter initial delay for responsive interactive
+feedback and stop the timer entirely when idle.  When nil, use the
+fixed `ghostel-timer-delay' unconditionally."
+  :type 'boolean)
+
+(defcustom ghostel-full-redraw nil
+  "When non-nil, always perform full redraws instead of incremental updates.
+Full redraws are more robust with TUI apps like Claude Code that do
+aggressive partial screen updates, but may use more CPU."
+  :type 'boolean)
+
+(defcustom ghostel-buffer-name "*ghostel*"
+  "Default buffer name for ghostel terminals."
+  :type 'string)
+
+(defcustom ghostel-kill-buffer-on-exit t
+  "Kill the buffer when the shell process exits."
+  :type 'boolean)
+
+(defcustom ghostel-exit-functions nil
+  "Hook run when the terminal process exits.
+Each function is called with two arguments: the buffer and the
+exit event string."
+  :type 'hook)
+
+(defcustom ghostel-eval-cmds '(("find-file" find-file)
+                               ("find-file-other-window" find-file-other-window)
+                               ("dired" dired)
+                               ("dired-other-window" dired-other-window)
+                               ("message" message))
+  "Whitelisted Emacs functions callable from the terminal via OSC 51.
+Each entry is (NAME FUNCTION) where NAME is the string sent from
+the shell and FUNCTION is the Elisp function to invoke.
+All arguments are passed as strings."
+  :type '(alist :key-type string :value-type function))
+
+(defcustom ghostel-enable-osc52 nil
+  "Allow terminal applications to set the clipboard via OSC 52.
+When non-nil, programs running in the terminal can copy text to the
+Emacs kill ring and system clipboard using OSC 52 escape sequences.
+This is useful for remote SSH sessions where the application cannot
+access the local clipboard directly.
+
+Disabled by default for security: a malicious escape sequence in
+command output could silently overwrite your clipboard."
+  :type 'boolean)
+
+(defcustom ghostel-enable-url-detection t
+  "Automatically detect and linkify URLs in terminal output.
+When non-nil, plain-text URLs (http:// and https://) are made
+clickable even if the program did not use OSC 8 hyperlink escapes."
+  :type 'boolean)
+
+(defcustom ghostel-enable-file-detection t
+  "Automatically detect and linkify file:line references in terminal output.
+When non-nil, patterns like /path/to/file.el:42 are made clickable,
+opening the file at the given line in another window."
+  :type 'boolean)
 
 (defcustom ghostel-module-auto-install 'ask
   "What to do when the native module is missing at load time.
@@ -98,8 +174,146 @@ nil         — do nothing; the user must install the module manually."
   :type '(choice (const :tag "Ask interactively" ask)
                  (const :tag "Download pre-built binary" download)
                  (const :tag "Compile from source" compile)
-                 (const :tag "Do nothing" nil))
-  :group 'ghostel)
+                 (const :tag "Do nothing" nil)))
+
+(defcustom ghostel-shell-integration t
+  "Automatically inject shell integration on startup.
+When non-nil, ghostel modifies the shell invocation to automatically
+load shell integration scripts without requiring changes to the user's
+shell configuration files.  Supports bash, zsh, and fish."
+  :type 'boolean)
+
+(defcustom ghostel-keymap-exceptions
+  '("C-c" "C-x" "C-u" "C-h" "C-g" "M-x" "M-o" "M-:" "C-\\")
+  "Key sequences that should not be sent to the terminal.
+These keys pass through to Emacs instead."
+  :type '(repeat string))
+
+;;; ANSI color faces
+
+(defface ghostel-color-black
+  '((t :inherit term-color-black))
+  "Face used to render black color code.")
+
+(defface ghostel-color-red
+  '((t :inherit term-color-red))
+  "Face used to render red color code.")
+
+(defface ghostel-color-green
+  '((t :inherit term-color-green))
+  "Face used to render green color code.")
+
+(defface ghostel-color-yellow
+  '((t :inherit term-color-yellow))
+  "Face used to render yellow color code.")
+
+(defface ghostel-color-blue
+  '((t :inherit term-color-blue))
+  "Face used to render blue color code.")
+
+(defface ghostel-color-magenta
+  '((t :inherit term-color-magenta))
+  "Face used to render magenta color code.")
+
+(defface ghostel-color-cyan
+  '((t :inherit term-color-cyan))
+  "Face used to render cyan color code.")
+
+(defface ghostel-color-white
+  '((t :inherit term-color-white))
+  "Face used to render white color code.")
+
+(defface ghostel-color-bright-black
+  `((t :inherit ,(if (facep 'term-color-bright-black)
+                     'term-color-bright-black
+                   'term-color-black)))
+  "Face used to render bright black color code.")
+
+(defface ghostel-color-bright-red
+  `((t :inherit ,(if (facep 'term-color-bright-red)
+                     'term-color-bright-red
+                   'term-color-red)))
+  "Face used to render bright red color code.")
+
+(defface ghostel-color-bright-green
+  `((t :inherit ,(if (facep 'term-color-bright-green)
+                     'term-color-bright-green
+                   'term-color-green)))
+  "Face used to render bright green color code.")
+
+(defface ghostel-color-bright-yellow
+  `((t :inherit ,(if (facep 'term-color-bright-yellow)
+                     'term-color-bright-yellow
+                   'term-color-yellow)))
+  "Face used to render bright yellow color code.")
+
+(defface ghostel-color-bright-blue
+  `((t :inherit ,(if (facep 'term-color-bright-blue)
+                     'term-color-bright-blue
+                   'term-color-blue)))
+  "Face used to render bright blue color code.")
+
+(defface ghostel-color-bright-magenta
+  `((t :inherit ,(if (facep 'term-color-bright-magenta)
+                     'term-color-bright-magenta
+                   'term-color-magenta)))
+  "Face used to render bright magenta color code.")
+
+(defface ghostel-color-bright-cyan
+  `((t :inherit ,(if (facep 'term-color-bright-cyan)
+                     'term-color-bright-cyan
+                   'term-color-cyan)))
+  "Face used to render bright cyan color code.")
+
+(defface ghostel-color-bright-white
+  `((t :inherit ,(if (facep 'term-color-bright-white)
+                     'term-color-bright-white
+                   'term-color-white)))
+  "Face used to render bright white color code.")
+
+(defvar ghostel-color-palette
+  [ghostel-color-black
+   ghostel-color-red
+   ghostel-color-green
+   ghostel-color-yellow
+   ghostel-color-blue
+   ghostel-color-magenta
+   ghostel-color-cyan
+   ghostel-color-white
+   ghostel-color-bright-black
+   ghostel-color-bright-red
+   ghostel-color-bright-green
+   ghostel-color-bright-yellow
+   ghostel-color-bright-blue
+   ghostel-color-bright-magenta
+   ghostel-color-bright-cyan
+   ghostel-color-bright-white]
+  "Color palette for the terminal (vector of 16 face names).")
+
+(defvar ghostel-github-release-url
+  "https://github.com/dakra/ghostel/releases"
+  "Base URL for ghostel GitHub releases.")
+
+
+;; Declare native module functions for the byte compiler
+
+(declare-function ghostel--encode-key "ghostel-module")
+(declare-function ghostel--focus-event "ghostel-module")
+(declare-function ghostel--mode-enabled "ghostel-module")
+(declare-function ghostel--mouse-event "ghostel-module")
+(declare-function ghostel--new "ghostel-module")
+(declare-function ghostel--redraw "ghostel-module" (term &optional full))
+(declare-function ghostel--scroll "ghostel-module")
+(declare-function ghostel--scroll-bottom "ghostel-module")
+(declare-function ghostel--scroll-top "ghostel-module")
+(declare-function ghostel--set-palette "ghostel-module")
+(declare-function ghostel--set-size "ghostel-module")
+(declare-function ghostel--write-input "ghostel-module")
+(declare-function package-desc-version "package" (pkg-desc))
+(declare-function package-version-join "package" (vlist))
+
+
+;;; Automatic download and compilation of native module
 
 (defun ghostel--module-platform-tag ()
   "Return platform tag for the current system, e.g. \"x86_64-linux\".
@@ -244,6 +458,14 @@ Returns nil without error when `package.el' is unavailable."
           (message "ghostel: module loaded successfully"))
       (user-error "Download failed.  Try M-x ghostel-module-compile to build from source"))))
 
+(defun ghostel-module-compile ()
+  "Compile the ghostel native module by running build.sh.
+The output is shown in a *ghostel-build* compilation buffer."
+  (interactive)
+  (let ((default-directory (file-name-directory (or (locate-library "ghostel")
+                                                    default-directory))))
+    (compile (expand-file-name "build.sh") t)))
+
 ;; Load the native module
 (unless (featurep 'ghostel-module)
   (let* ((dir (file-name-directory (or load-file-name buffer-file-name)))
@@ -263,247 +485,7 @@ Returns nil without error when `package.el' is unavailable."
                          (concat "Native module not found: " mod
                                  "\nRun M-x ghostel-download-module or M-x ghostel-module-compile"))))))
 
-;; Declare native module functions for the byte compiler
-(declare-function ghostel--new "ghostel-module")
-(declare-function ghostel--write-input "ghostel-module")
-(declare-function ghostel--set-size "ghostel-module")
-(declare-function ghostel--redraw "ghostel-module" (term &optional full))
-(declare-function ghostel--scroll "ghostel-module")
-(declare-function ghostel--encode-key "ghostel-module")
-(declare-function ghostel--mouse-event "ghostel-module")
-(declare-function ghostel--focus-event "ghostel-module")
-(declare-function ghostel--set-palette "ghostel-module")
-(declare-function ghostel--mode-enabled "ghostel-module")
-(declare-function ghostel--scroll-top "ghostel-module")
-(declare-function ghostel--scroll-bottom "ghostel-module")
-
-;;; Customization
-
-(defgroup ghostel nil
-  "Terminal emulator powered by libghostty."
-  :group 'terminals
-  :prefix "ghostel-")
-
-(defcustom ghostel-shell (or (getenv "SHELL") "/bin/sh")
-  "Shell program to run in the terminal."
-  :type 'string
-  :group 'ghostel)
-
-(defcustom ghostel-max-scrollback 10000
-  "Maximum number of scrollback lines."
-  :type 'integer
-  :group 'ghostel)
-
-(defcustom ghostel-timer-delay 0.033
-  "Delay in seconds before redrawing after output (roughly 30fps).
-When `ghostel-adaptive-fps' is non-nil, this serves as the base
-delay between frames during sustained output."
-  :type 'number
-  :group 'ghostel)
-
-(defcustom ghostel-adaptive-fps t
-  "Use adaptive frame rate for terminal redraw.
-When non-nil, use a shorter initial delay for responsive interactive
-feedback and stop the timer entirely when idle.  When nil, use the
-fixed `ghostel-timer-delay' unconditionally."
-  :type 'boolean
-  :group 'ghostel)
-
-(defcustom ghostel-full-redraw nil
-  "When non-nil, always perform full redraws instead of incremental updates.
-Full redraws are more robust with TUI apps like Claude Code that do
-aggressive partial screen updates, but may use more CPU."
-  :type 'boolean
-  :group 'ghostel)
-
-(defcustom ghostel-buffer-name "*ghostel*"
-  "Default buffer name for ghostel terminals."
-  :type 'string
-  :group 'ghostel)
-
-(defcustom ghostel-kill-buffer-on-exit t
-  "Kill the buffer when the shell process exits."
-  :type 'boolean
-  :group 'ghostel)
-
-(defcustom ghostel-exit-functions nil
-  "Hook run when the terminal process exits.
-Each function is called with two arguments: the buffer and the
-exit event string."
-  :type 'hook
-  :group 'ghostel)
-
-(defcustom ghostel-eval-cmds '(("find-file" find-file)
-                                ("find-file-other-window" find-file-other-window)
-                                ("dired" dired)
-                                ("dired-other-window" dired-other-window)
-                                ("message" message))
-  "Whitelisted Emacs functions callable from the terminal via OSC 51.
-Each entry is (NAME FUNCTION) where NAME is the string sent from
-the shell and FUNCTION is the Elisp function to invoke.
-All arguments are passed as strings."
-  :type '(alist :key-type string :value-type function)
-  :group 'ghostel)
-
-(defcustom ghostel-enable-osc52 nil
-  "Allow terminal applications to set the clipboard via OSC 52.
-When non-nil, programs running in the terminal can copy text to the
-Emacs kill ring and system clipboard using OSC 52 escape sequences.
-This is useful for remote SSH sessions where the application cannot
-access the local clipboard directly.
-
-Disabled by default for security: a malicious escape sequence in
-command output could silently overwrite your clipboard."
-  :type 'boolean
-  :group 'ghostel)
-
-(defcustom ghostel-enable-url-detection t
-  "Automatically detect and linkify URLs in terminal output.
-When non-nil, plain-text URLs (http:// and https://) are made
-clickable even if the program did not use OSC 8 hyperlink escapes."
-  :type 'boolean
-  :group 'ghostel)
-
-(defcustom ghostel-enable-file-detection t
-  "Automatically detect and linkify file:line references in terminal output.
-When non-nil, patterns like /path/to/file.el:42 are made clickable,
-opening the file at the given line in another window."
-  :type 'boolean
-  :group 'ghostel)
-
-(defcustom ghostel-shell-integration t
-  "Automatically inject shell integration on startup.
-When non-nil, ghostel modifies the shell invocation to automatically
-load shell integration scripts without requiring changes to the user's
-shell configuration files.  Supports bash, zsh, and fish."
-  :type 'boolean
-  :group 'ghostel)
-
-
-(defcustom ghostel-keymap-exceptions
-  '("C-c" "C-x" "C-u" "C-h" "C-g" "M-x" "M-o" "M-:" "C-\\")
-  "Key sequences that should not be sent to the terminal.
-These keys pass through to Emacs instead."
-  :type '(repeat string)
-  :group 'ghostel)
-
-;;; ANSI color faces
-
-(defface ghostel-color-black
-  '((t :inherit term-color-black))
-  "Face used to render black color code."
-  :group 'ghostel)
-
-(defface ghostel-color-red
-  '((t :inherit term-color-red))
-  "Face used to render red color code."
-  :group 'ghostel)
-
-(defface ghostel-color-green
-  '((t :inherit term-color-green))
-  "Face used to render green color code."
-  :group 'ghostel)
-
-(defface ghostel-color-yellow
-  '((t :inherit term-color-yellow))
-  "Face used to render yellow color code."
-  :group 'ghostel)
-
-(defface ghostel-color-blue
-  '((t :inherit term-color-blue))
-  "Face used to render blue color code."
-  :group 'ghostel)
-
-(defface ghostel-color-magenta
-  '((t :inherit term-color-magenta))
-  "Face used to render magenta color code."
-  :group 'ghostel)
-
-(defface ghostel-color-cyan
-  '((t :inherit term-color-cyan))
-  "Face used to render cyan color code."
-  :group 'ghostel)
-
-(defface ghostel-color-white
-  '((t :inherit term-color-white))
-  "Face used to render white color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-black
-  `((t :inherit ,(if (facep 'term-color-bright-black)
-                     'term-color-bright-black
-                   'term-color-black)))
-  "Face used to render bright black color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-red
-  `((t :inherit ,(if (facep 'term-color-bright-red)
-                     'term-color-bright-red
-                   'term-color-red)))
-  "Face used to render bright red color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-green
-  `((t :inherit ,(if (facep 'term-color-bright-green)
-                     'term-color-bright-green
-                   'term-color-green)))
-  "Face used to render bright green color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-yellow
-  `((t :inherit ,(if (facep 'term-color-bright-yellow)
-                     'term-color-bright-yellow
-                   'term-color-yellow)))
-  "Face used to render bright yellow color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-blue
-  `((t :inherit ,(if (facep 'term-color-bright-blue)
-                     'term-color-bright-blue
-                   'term-color-blue)))
-  "Face used to render bright blue color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-magenta
-  `((t :inherit ,(if (facep 'term-color-bright-magenta)
-                     'term-color-bright-magenta
-                   'term-color-magenta)))
-  "Face used to render bright magenta color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-cyan
-  `((t :inherit ,(if (facep 'term-color-bright-cyan)
-                     'term-color-bright-cyan
-                   'term-color-cyan)))
-  "Face used to render bright cyan color code."
-  :group 'ghostel)
-
-(defface ghostel-color-bright-white
-  `((t :inherit ,(if (facep 'term-color-bright-white)
-                     'term-color-bright-white
-                   'term-color-white)))
-  "Face used to render bright white color code."
-  :group 'ghostel)
-
-(defvar ghostel-color-palette
-  [ghostel-color-black
-   ghostel-color-red
-   ghostel-color-green
-   ghostel-color-yellow
-   ghostel-color-blue
-   ghostel-color-magenta
-   ghostel-color-cyan
-   ghostel-color-white
-   ghostel-color-bright-black
-   ghostel-color-bright-red
-   ghostel-color-bright-green
-   ghostel-color-bright-yellow
-   ghostel-color-bright-blue
-   ghostel-color-bright-magenta
-   ghostel-color-bright-cyan
-   ghostel-color-bright-white]
-  "Color palette for the terminal (vector of 16 face names).")
-
+
 ;;; Internal variables
 
 (defvar-local ghostel--term nil
@@ -536,6 +518,7 @@ Used for prompt navigation and optional re-application after full redraws.")
 (defvar ghostel--buffer-counter 0
   "Counter for generating unique terminal buffer names.")
 
+
 ;;; Keymap
 
 (defvar ghostel-mode-map
@@ -606,6 +589,7 @@ Used for prompt navigation and optional re-application after full redraws.")
     map)
   "Keymap for `ghostel-mode'.")
 
+
 ;;; Key sending
 
 (defun ghostel-send-next-key ()
@@ -758,6 +742,7 @@ modes (application cursor keys, Kitty keyboard protocol, etc.)."
     (when key-name
       (ghostel--send-encoded key-name mod-str))))
 
+
 ;;; Terminal control commands (C-c prefix)
 
 (defun ghostel-send-C-c ()
@@ -780,6 +765,7 @@ modes (application cursor keys, Kitty keyboard protocol, etc.)."
   (interactive)
   (ghostel--send-encoded "d" "ctrl"))
 
+
 ;;; Paste / yank
 
 (defvar-local ghostel--yank-index 0
@@ -831,6 +817,7 @@ Sends backspaces to erase the previous yank, then pastes the next entry."
     (ghostel--paste-text (current-kill ghostel--yank-index t))
     (setq this-command 'ghostel-yank-pop)))
 
+
 ;;; Drag and drop
 
 (defun ghostel--drop (event)
@@ -856,6 +843,7 @@ pasted using bracketed paste."
         (ghostel--send-key
          (mapconcat #'shell-quote-argument payload " ")))))))
 
+
 ;;; Scrollback / clearing
 
 (defun ghostel-clear-scrollback ()
@@ -965,6 +953,7 @@ pasted using bracketed paste."
   (end-of-line)
   (skip-chars-backward " \t"))
 
+
 ;;; Mouse input
 
 (defun ghostel--mouse-button-number (event)
@@ -1026,6 +1015,7 @@ pasted using bracketed paste."
                             row col
                             (ghostel--mouse-mods event)))))
 
+
 ;;; Copy mode
 
 (defvar ghostel-copy-mode-map
@@ -1132,6 +1122,7 @@ stripped so the copied text matches the original terminal content."
       (message "Copied to kill ring")))
   (ghostel-copy-mode-exit))
 
+
 ;;; Hyperlinks (OSC 8)
 
 (defvar ghostel-link-map
@@ -1209,6 +1200,7 @@ Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
                 (put-text-property beg end 'mouse-face 'highlight)
                 (put-text-property beg end 'keymap ghostel-link-map)))))))))
 
+
 ;;; Prompt navigation (OSC 133)
 
 (defun ghostel--osc133-marker (type param)
@@ -1306,6 +1298,7 @@ the last non-whitespace+whitespace boundary (e.g. after `$ ' or `# ')."
     (ghostel-copy-mode))
   (ghostel--navigate-previous-prompt n))
 
+
 ;;; Callbacks from native module
 
 (defun ghostel--osc51-eval (str)
@@ -1381,6 +1374,7 @@ DIR may be a file:// URL or a plain path."
       (when (and path (file-directory-p path))
         (setq default-directory (file-name-as-directory path))))))
 
+
 ;;; Palette
 
 (defun ghostel--face-hex-color (face attr)
@@ -1409,6 +1403,7 @@ Falls back to \"#000000\" if the color cannot be resolved."
             "")))
       (ghostel--set-palette term colors))))
 
+
 ;;; Theme synchronization
 
 (defun ghostel-sync-theme ()
@@ -1433,6 +1428,7 @@ Call this after changing the Emacs theme so terminals match."
   ;; Emacs < 29 fallback
   (advice-add 'load-theme :after #'ghostel--on-theme-change))
 
+
 ;;; Focus events
 
 (defun ghostel--focus-change ()
@@ -1454,6 +1450,7 @@ will be concatenated and passed to `ghostel--write-input' at the
 next redraw.  Batching writes reduces per-call overhead in the
 VT parser.")
 
+
 ;;; Process management
 
 (defun ghostel--filter (process output)
@@ -1592,6 +1589,7 @@ PROCESS is the shell process, EVENT describes the state change."
        proc (concat " " stty-cmd "; printf '\\e[H\\e[2J'\n")))
     proc))
 
+
 ;;; Rendering
 
 (defvar-local ghostel--last-output-time nil
@@ -1657,6 +1655,7 @@ frame after idle to improve interactive responsiveness."
       (ghostel--redraw ghostel--term ghostel-full-redraw)
       (ghostel--pin-window-start))))
 
+
 ;;; Window resize
 
 (defun ghostel--window-adjust-process-window-size (process windows)
@@ -1704,6 +1703,8 @@ PROCESS is the shell, HEIGHT and WIDTH the final dimensions."
           (ghostel--redraw ghostel--term ghostel-full-redraw)
           (ghostel--pin-window-start))))))
 
+
+
 ;;; Major mode
 
 (define-derived-mode ghostel-mode fundamental-mode "Ghostel"
@@ -1720,16 +1721,7 @@ PROCESS is the shell, HEIGHT and WIDTH the final dimensions."
               #'ghostel--window-adjust-process-window-size)
   (add-function :after after-focus-change-function #'ghostel--focus-change))
 
-;;; Module compilation
-
-(defun ghostel-module-compile ()
-  "Compile the ghostel native module by running build.sh.
-The output is shown in a *ghostel-build* compilation buffer."
-  (interactive)
-  (let ((default-directory (file-name-directory (or (locate-library "ghostel")
-                                                    default-directory))))
-    (compile (expand-file-name "build.sh") t)))
-
+
 ;;; Entry point
 
 ;;;###autoload
