@@ -42,9 +42,11 @@ preexec_functions=(__ghostel_preexec "${preexec_functions[@]}")
 # Usage: ghostel_cmd FUNCTION [ARGS...]
 # The function must be in `ghostel-eval-cmds'.
 ghostel_cmd() {
-    local payload=""
+    local payload="" arg
     while (( $# )); do
-        payload="$payload\"${1//\\/\\\\}\" "
+        arg="${1//\\/\\\\}"
+        arg="${arg//\"/\\\"}"
+        payload="$payload\"$arg\" "
         shift
     done
     printf '\e]51;E%s\e\\' "$payload"
