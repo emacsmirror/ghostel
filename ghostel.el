@@ -848,20 +848,33 @@ pasted using bracketed paste."
 ;;; Scrollback / clearing
 
 (defun ghostel-clear-scrollback ()
-  "Clear the scrollback buffer."
-  (interactive)
-  (when (and ghostel--process (process-live-p ghostel--process))
-    ;; CSI 3 J = erase scrollback
-    (process-send-string ghostel--process "\e[3J")
-    (ghostel--invalidate)))
-
-(defun ghostel-clear ()
   "Clear the screen and scrollback buffer."
   (interactive)
-  (when (and ghostel--process (process-live-p ghostel--process))
-    ;; CSI H = cursor home, CSI 2 J = erase screen, CSI 3 J = erase scrollback
-    (process-send-string ghostel--process "\e[H\e[2J\e[3J")
-    (ghostel--invalidate)))
+  (when ghostel--term
+    ;; Flush pending process output first so it doesn't recreate
+    ;; scrollback after the clear.
+    (ghostel--flush-pending-output)
+    ;; CSI H = home, CSI 2 J = erase screen, CSI 3 J = erase scrollback.
+    (ghostel--write-input ghostel--term "\e[H\e[2J\e[3J")
+    (ghostel--scroll-bottom ghostel--term)
+    (setq ghostel--force-next-redraw t)
+    (ghostel--invalidate)
+    ;; Send form-feed to the shell so it redraws its prompt.
+    (when (and ghostel--process (process-live-p ghostel--process))
+      (process-send-string ghostel--process "\f"))))
+
+(defun ghostel-clear ()
+  "Clear the visible screen, preserving scrollback history."
+  (interactive)
+  (when ghostel--term
+    ;; Flush pending process output first so it renders before the clear.
+    (ghostel--flush-pending-output)
+    (ghostel--write-input ghostel--term "\e[H\e[2J")
+    (setq ghostel--force-next-redraw t)
+    (ghostel--invalidate)
+    ;; Send form-feed to the shell so it redraws its prompt.
+    (when (and ghostel--process (process-live-p ghostel--process))
+      (process-send-string ghostel--process "\f"))))
 
 (defun ghostel--scroll-up (&optional _event)
   "Scroll the terminal viewport up (into scrollback)."

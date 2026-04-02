@@ -145,6 +145,85 @@
       (should (string-match-p "line [0-4]" state)))))     ; scrollback shows earlier lines
 
 ;; -----------------------------------------------------------------------
+;; Test: clear screen (ghostel-clear)
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-clear-screen ()
+  "Test that ghostel-clear clears the visible screen but preserves scrollback."
+  (let ((buf (generate-new-buffer " *ghostel-test-clear*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (setq ghostel--term (ghostel--new 5 80 100))
+          (let* ((process-environment
+                  (append (list "TERM=xterm-256color" "COLUMNS=80" "LINES=5")
+                          process-environment))
+                 (proc (make-process
+                        :name "ghostel-test-clear"
+                        :buffer buf
+                        :command '("/bin/zsh" "-f")
+                        :connection-type 'pty
+                        :filter #'ghostel--filter)))
+            (setq ghostel--process proc)
+            (set-process-coding-system proc 'binary 'binary)
+            (set-process-window-size proc 5 80)
+            (set-process-query-on-exit-flag proc nil)
+            ;; Wait for shell init
+            (dotimes (_ 30) (accept-process-output proc 0.2))
+            (ghostel--flush-pending-output)
+            (let ((inhibit-read-only t)) (ghostel--redraw ghostel--term t))
+            ;; Generate scrollback
+            (dotimes (i 15)
+              (process-send-string proc (format "echo clear-test-%d\n" i)))
+            (dotimes (_ 20) (accept-process-output proc 0.2))
+            ;; Do NOT manually flush — let ghostel-clear handle it
+            (should (> (length ghostel--pending-output) 0))    ; pending output exists
+            ;; Clear screen
+            (ghostel-clear)
+            ;; Simulate what delayed-redraw does
+            (ghostel--flush-pending-output)
+            (let ((inhibit-read-only t)) (ghostel--redraw ghostel--term t))
+            ;; Scrollback should still exist after screen clear
+            (ghostel--scroll ghostel--term -30)
+            (let ((inhibit-read-only t)) (ghostel--redraw ghostel--term t))
+            (let ((content (buffer-substring-no-properties (point-min) (point-max))))
+              (should (string-match-p "clear-test-0" content))) ; scrollback preserved
+            (delete-process proc)))
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
+;; Test: clear scrollback (ghostel-clear-scrollback)
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-clear-scrollback ()
+  "Test that ghostel-clear-scrollback clears both screen and scrollback."
+  (let ((buf (generate-new-buffer " *ghostel-test-clear-sb*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (setq ghostel--term (ghostel--new 5 80 100))
+          ;; Fill screen + scrollback with 10 lines
+          (dotimes (i 10)
+            (ghostel--write-input ghostel--term (format "line %d\r\n" i)))
+          ;; Verify content on screen and in scrollback
+          (let ((state (ghostel--debug-state ghostel--term)))
+            (should (string-match-p "line [6-9]" state)))      ; recent lines on screen
+          (ghostel--scroll ghostel--term -5)
+          (let ((state (ghostel--debug-state ghostel--term)))
+            (should (string-match-p "line [0-4]" state)))      ; early lines in scrollback
+          ;; Return to bottom and call the actual function
+          (ghostel--scroll-bottom ghostel--term)
+          (ghostel-clear-scrollback)
+          ;; Screen should be empty
+          (let ((state (ghostel--debug-state ghostel--term)))
+            (should-not (string-match-p "line [6-9]" state)))  ; screen cleared
+          ;; Scrollback should also be empty
+          (ghostel--scroll ghostel--term -10)
+          (let ((state (ghostel--debug-state ghostel--term)))
+            (should-not (string-match-p "line [0-4]" state)))) ; scrollback cleared
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
 ;; Test: SGR styling (bold, color, etc.)
 ;; -----------------------------------------------------------------------
 
