@@ -254,6 +254,31 @@
       (kill-buffer buf))))
 
 ;; -----------------------------------------------------------------------
+;; Test: wide character (emoji) does not overflow line
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-wide-char-no-overflow ()
+  "Test that wide characters (emoji) don't make rendered lines overflow.
+A 2-cell-wide emoji should not produce an extra space for the spacer
+cell, so the visual line width must equal the terminal column count."
+  (let ((buf (generate-new-buffer " *ghostel-test-wide*"))
+        (cols 40))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 cols 100))
+                 (inhibit-read-only t))
+            ;; Feed a wide emoji — occupies 2 terminal cells
+            (ghostel--write-input term "🟢")
+            (ghostel--redraw term t)
+            ;; First rendered line should have visual width == cols
+            (goto-char (point-min))
+            (let* ((line (buffer-substring (line-beginning-position)
+                                           (line-end-position)))
+                   (width (string-width line)))
+              (should (equal cols width)))))
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
 ;; Test: title change (OSC 2)
 ;; -----------------------------------------------------------------------
 

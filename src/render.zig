@@ -791,6 +791,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full: bool) void {
     // Auto-detect plain-text URLs
     if (dirty != gt.DIRTY_FALSE) {
         _ = env.call0(emacs.sym.@"ghostel--detect-urls");
+        _ = env.call0(emacs.sym.@"ghostel--compensate-wide-chars");
     }
 
     // Position cursor

@@ -1273,6 +1273,37 @@ Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
                 (put-text-property beg end 'keymap ghostel-link-map)))))))))
 
 
+(defun ghostel--compensate-wide-chars ()
+  "Hide trailing spaces on lines where wide-char glyphs cause pixel overflow.
+Emoji glyphs often render wider than `char-width' times `frame-char-width'
+pixels, making the display engine treat the line as wider than the window
+even though `string-width' equals the terminal column count.  For each
+overflowing line, hide the minimal trailing spaces via `display' properties."
+  (when (and (display-graphic-p)
+             (fboundp 'string-pixel-width))
+    (let ((char-w (frame-char-width))
+          (win-w (window-body-width nil t)))
+      (save-excursion
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let* ((bol (line-beginning-position))
+                 (eol (line-end-position))
+                 (line (buffer-substring bol eol))
+                 (pw (string-pixel-width line))
+                 (overshoot (- pw win-w)))
+            (when (> overshoot 0)
+              (let* ((spaces-start (save-excursion
+                                     (goto-char eol)
+                                     (skip-chars-backward " " bol)
+                                     (point)))
+                     (avail (- eol spaces-start))
+                     (hide (min (ceiling (/ (float overshoot) char-w))
+                                avail)))
+                (when (> hide 0)
+                  (put-text-property (- eol hide) eol 'display "")))))
+          (forward-line 1))))))
+
+
 ;;; Prompt navigation (OSC 133)
 
 (defun ghostel--osc133-marker (type param)
