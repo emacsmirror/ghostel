@@ -16,7 +16,31 @@ check:
 test:
 	$(EMACS) --batch -Q -L . -l ert -l test/ghostel-test.el -f ghostel-test-run-elisp
 
-lint: melpazoid
+lint: byte-compile package-lint checkdoc
+
+package-lint:
+	$(EMACS) --batch -Q \
+		--eval "(package-initialize)" \
+		--eval "(require 'package-lint)" \
+		-f package-lint-batch-and-exit \
+		ghostel.el ghostel-debug.el
+
+checkdoc:
+	$(EMACS) --batch -Q \
+		--eval "(require 'checkdoc)" \
+		--eval "(let ((sentence-end-double-space nil) \
+		              (checkdoc-proper-noun-list nil) \
+		              (checkdoc-verb-check-experimental-flag nil) \
+		              (inhibit-message t) \
+		              (ok t)) \
+		  (dolist (f '(\"ghostel.el\" \"ghostel-debug.el\")) \
+		    (ignore-errors (kill-buffer \"*Warnings*\")) \
+		    (checkdoc-file f) \
+		    (when (get-buffer \"*Warnings*\") \
+		      (setq ok nil) \
+		      (with-current-buffer \"*Warnings*\" \
+		        (message \"%s\" (buffer-string))))) \
+		  (unless ok (kill-emacs 1)))"
 
 melpazoid:
 	@if [ ! -d "$(MELPAZOID_DIR)" ]; then \
