@@ -4,7 +4,7 @@
 
 ;; Author: Daniel Kraus
 ;; URL: https://github.com/dakra/ghostel
-;; Version: 0.1.0
+;; Version: 0.2.50
 ;; Keywords: terminals
 ;; Package-Requires: ((emacs "27.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -294,12 +294,18 @@ These keys pass through to Emacs instead."
   "https://github.com/dakra/ghostel/releases"
   "Base URL for ghostel GitHub releases.")
 
+(defconst ghostel--minimum-module-version "0.2"
+  "Minimum native module version required by this Elisp version.
+Bump this only when the Elisp code requires a newer native module
+\(e.g. new Zig-exported function or changed calling convention).")
+
 
 ;; Declare native module functions for the byte compiler
 
 (declare-function ghostel--encode-key "ghostel-module")
 (declare-function ghostel--focus-event "ghostel-module")
 (declare-function ghostel--mode-enabled "ghostel-module")
+(declare-function ghostel--module-version "ghostel-module")
 (declare-function ghostel--mouse-event "ghostel-module")
 (declare-function ghostel--new "ghostel-module")
 (declare-function ghostel--redraw "ghostel-module" (term &optional full))
@@ -467,6 +473,39 @@ The output is shown in a *ghostel-build* compilation buffer."
                                                     default-directory))))
     (compile (expand-file-name "build.sh") t)))
 
+(defun ghostel--elisp-version ()
+  "Return the ghostel Elisp version from the package header."
+  (or (ghostel--package-version)
+      ;; Fall back to parsing the header from the source file.
+      (let ((file (or load-file-name
+                      (locate-library "ghostel")
+                      buffer-file-name)))
+        (when file
+          ;; Ensure we read the .el source, not a .elc byte-compiled file.
+          (when (string-suffix-p ".elc" file)
+            (setq file (substring file 0 -1)))
+          (when (file-exists-p file)
+            (with-temp-buffer
+              (insert-file-contents file nil 0 512)
+              (when (re-search-forward "^;; Version: \\([0-9.]+\\)" nil t)
+                (match-string 1))))))))
+
+(defun ghostel--check-module-version (dir)
+  "Check if the loaded module is older than required.
+When the module version is below `ghostel--minimum-module-version',
+offer to update using `ghostel-module-auto-install'.
+DIR is the module directory."
+  (let ((mod-ver (and (fboundp 'ghostel--module-version)
+                      (ghostel--module-version))))
+    (when (or (null mod-ver)
+              (version< mod-ver ghostel--minimum-module-version))
+      (display-warning 'ghostel
+                       (format "Module version %s is older than required %s"
+                               (or mod-ver "unknown")
+                               ghostel--minimum-module-version))
+      (unless noninteractive
+        (ghostel--ensure-module dir)))))
+
 ;; Load the native module
 (unless (featurep 'ghostel-module)
   (let* ((dir (file-name-directory (or load-file-name buffer-file-name)))
@@ -476,7 +515,9 @@ The output is shown in a *ghostel-build* compilation buffer."
       (ghostel--ensure-module dir))
     (if (file-exists-p mod)
         (condition-case err
-            (module-load mod)
+            (progn
+              (module-load mod)
+              (ghostel--check-module-version dir))
           (error
            (display-warning 'ghostel
                             (format "Failed to load native module: %s\nTry M-x ghostel-module-compile to rebuild"

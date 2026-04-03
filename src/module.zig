@@ -12,6 +12,9 @@ const input = @import("input.zig");
 
 const c = emacs.c;
 
+/// Module version — keep in sync with ghostel.el and build.zig.zon.
+const version = "0.2";
+
 // ---------------------------------------------------------------------------
 // Module entry point
 // ---------------------------------------------------------------------------
@@ -42,6 +45,7 @@ export fn emacs_module_init(runtime: *c.struct_emacs_runtime) callconv(.c) c_int
     env.bindFunction("ghostel--mode-enabled", 2, 2, &fnModeEnabled, "Return t if terminal DEC private MODE is enabled.\n\n(ghostel--mode-enabled TERM MODE)");
     env.bindFunction("ghostel--debug-state", 1, 1, &fnDebugState, "Return debug info about terminal/render state.\n\n(ghostel--debug-state TERM)");
     env.bindFunction("ghostel--debug-feed", 2, 2, &fnDebugFeed, "Feed STR to terminal and return first row + cursor.\n\n(ghostel--debug-feed TERM STR)");
+    env.bindFunction("ghostel--module-version", 0, 0, &fnModuleVersion, "Return the native module version string.\n\n(ghostel--module-version)");
 
     emacs.initSymbols(env);
     env.provide("ghostel-module");
@@ -666,6 +670,12 @@ fn fnDebugFeed(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*a
     pos += (std.fmt.bufPrint(buf[pos..], "\"", .{}) catch return env.nil()).len;
 
     return env.makeString(buf[0..pos]);
+}
+
+/// (ghostel--module-version)
+fn fnModuleVersion(raw_env: ?*c.emacs_env, _: isize, _: [*c]c.emacs_value, _: ?*anyopaque) callconv(.c) c.emacs_value {
+    const env = emacs.Env.init(raw_env.?);
+    return env.makeString(version);
 }
 
 // ---------------------------------------------------------------------------

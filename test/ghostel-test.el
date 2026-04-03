@@ -984,6 +984,54 @@
 ;; Runner
 ;; -----------------------------------------------------------------------
 
+;; -----------------------------------------------------------------------
+;; Test: module version check
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-elisp-version ()
+  "Test that `ghostel--elisp-version' returns a version string."
+  (let ((ver (ghostel--elisp-version)))
+    (should (stringp ver))
+    (should (string-match-p "^[0-9]+\\.[0-9]+" ver))))
+
+(ert-deftest ghostel-test-module-version-match ()
+  "Test that version check does nothing when module meets minimum."
+  (let ((warned nil)
+        (ghostel--minimum-module-version "0.2"))
+    (cl-letf (((symbol-function 'ghostel--module-version)
+               (lambda () "0.2"))
+              ((symbol-function 'display-warning)
+               (lambda (&rest _) (setq warned t))))
+      (ghostel--check-module-version "/tmp")
+      (should-not warned))))
+
+(ert-deftest ghostel-test-module-version-mismatch ()
+  "Test that version check warns when module is below minimum."
+  (let ((warned nil)
+        (ensure-called nil)
+        (noninteractive nil)
+        (ghostel--minimum-module-version "0.2"))
+    (cl-letf (((symbol-function 'ghostel--module-version)
+               (lambda () "0.1"))
+              ((symbol-function 'display-warning)
+               (lambda (&rest _) (setq warned t)))
+              ((symbol-function 'ghostel--ensure-module)
+               (lambda (dir) (setq ensure-called dir))))
+      (ghostel--check-module-version "/tmp")
+      (should warned)
+      (should (equal "/tmp" ensure-called)))))
+
+(ert-deftest ghostel-test-module-version-newer-than-minimum ()
+  "Test that version check does nothing when module exceeds minimum."
+  (let ((warned nil)
+        (ghostel--minimum-module-version "0.2"))
+    (cl-letf (((symbol-function 'ghostel--module-version)
+               (lambda () "0.3"))
+              ((symbol-function 'display-warning)
+               (lambda (&rest _) (setq warned t))))
+      (ghostel--check-module-version "/tmp")
+      (should-not warned))))
+
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
@@ -996,7 +1044,11 @@
     ghostel-test-osc51-eval
     ghostel-test-osc51-eval-unknown
     ghostel-test-copy-mode-cursor
-    ghostel-test-copy-mode-hl-line)
+    ghostel-test-copy-mode-hl-line
+    ghostel-test-elisp-version
+    ghostel-test-module-version-match
+    ghostel-test-module-version-mismatch
+    ghostel-test-module-version-newer-than-minimum)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()
