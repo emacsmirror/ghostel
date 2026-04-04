@@ -860,6 +860,104 @@ real-world performance (see PTY and streaming benchmarks for that)."
   (setq ghostel-bench-terminal-sizes '((24 . 80)))
   (ghostel-bench-run-all))
 
+
+;; ---------------------------------------------------------------------------
+;; Typing latency benchmark
+;; ---------------------------------------------------------------------------
+
+(defvar ghostel-bench-typing-count 50
+  "Number of keystrokes to send in the typing latency benchmark.")
+
+(defun ghostel-bench-typing-latency ()
+  "Benchmark per-keystroke typing latency through a real PTY.
+Spawns a shell, types characters one at a time, and measures the
+round-trip time from send to the echo appearing in the terminal.
+Reports min/median/p99/max for PTY, render, and total latency."
+  (interactive)
+  (ghostel-bench--load-backends)
+  (let* ((count ghostel-bench-typing-count)
+         (results (ghostel-bench--typing-latency-ghostel count)))
+    (ghostel-bench--typing-report "ghostel" results)
+    results))
+
+(defun ghostel-bench--typing-latency-ghostel (count)
+  "Send COUNT single-character keystrokes and measure round-trip latency.
+Returns a list of (PTY-MS RENDER-MS TOTAL-MS) for each keystroke."
+  (let* ((buf (generate-new-buffer " *ghostel-typing-bench*"))
+         (rows 24) (cols 80)
+         (results nil))
+    (with-current-buffer buf
+      (let* ((term (ghostel-bench--make-ghostel rows cols))
+             (inhibit-read-only t)
+             (pending nil)
+             (echo-received nil)
+             (echo-time nil)
+             ;; Start a cat process that echoes stdin
+             (proc (make-process
+                    :name "ghostel-typing-bench"
+                    :buffer buf
+                    :command (list "cat")
+                    :connection-type 'pty
+                    :coding 'binary
+                    :noquery t
+                    :filter (lambda (_proc output)
+                              (push output pending)
+                              (setq echo-time (current-time))
+                              (setq echo-received t))
+                    :sentinel #'ignore)))
+        (set-process-window-size proc rows cols)
+        ;; Wait for cat to be ready
+        (sleep-for 0.1)
+        ;; Type characters one at a time
+        (dotimes (i count)
+          (let* ((ch (string (+ ?a (% i 26))))
+                 (send-time (current-time))
+                 render-time)
+            (setq echo-received nil echo-time nil)
+            ;; Send character
+            (process-send-string proc ch)
+            ;; Wait for echo
+            (let ((deadline (+ (float-time) 1.0)))
+              (while (and (not echo-received)
+                          (< (float-time) deadline))
+                (accept-process-output proc 0.001)))
+            ;; Feed to terminal and render
+            (when pending
+              (ghostel--write-input term (apply #'concat (nreverse pending)))
+              (setq pending nil))
+            (ghostel--redraw term nil)
+            (setq render-time (current-time))
+            ;; Record latencies
+            (when echo-time
+              (push (list (* 1000 (float-time (time-subtract echo-time send-time)))
+                          (* 1000 (float-time (time-subtract render-time echo-time)))
+                          (* 1000 (float-time (time-subtract render-time send-time))))
+                    results))))
+        ;; Cleanup
+        (delete-process proc)))
+    (kill-buffer buf)
+    (nreverse results)))
+
+(defun ghostel-bench--typing-report (label results)
+  "Print a typing latency report for LABEL with RESULTS.
+RESULTS is a list of (PTY-MS RENDER-MS TOTAL-MS)."
+  (let ((n (length results)))
+    (message "\n=== Typing Latency Benchmark: %s (%d keystrokes) ===" label n)
+    (message "%-20s %8s %8s %8s %8s" "Phase" "Min" "Median" "P99" "Max")
+    (message "%s" (make-string 56 ?-))
+    (dolist (phase '(("PTY latency" 0) ("Render latency" 1) ("Total (e2e)" 2)))
+      (let* ((name (car phase))
+             (idx (cadr phase))
+             (vals (sort (mapcar (lambda (r) (nth idx r)) results) #'<)))
+        (when vals
+          (message "%-20s %7.2fms %7.2fms %7.2fms %7.2fms"
+                   name
+                   (car vals)
+                   (nth (/ n 2) vals)
+                   (nth (min (1- n) (floor (* n 0.99))) vals)
+                   (car (last vals))))))
+    (message "")))
+
 (provide 'ghostel-bench)
 
 ;;; ghostel-bench.el ends here

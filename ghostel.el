@@ -111,6 +111,29 @@ feedback and stop the timer entirely when idle.  When nil, use the
 fixed `ghostel-timer-delay' unconditionally."
   :type 'boolean)
 
+(defcustom ghostel-immediate-redraw-threshold 256
+  "Maximum bytes of output to trigger an immediate redraw.
+When output arrives within `ghostel-immediate-redraw-interval'
+seconds of the last keystroke and is smaller than this threshold,
+redraw immediately instead of waiting for the timer.  This
+eliminates the 16-33ms timer delay for interactive typing echo.
+Set to 0 to disable immediate redraws."
+  :type 'integer)
+
+(defcustom ghostel-immediate-redraw-interval 0.05
+  "Maximum seconds since last keystroke for immediate redraw.
+Output arriving within this interval of a `ghostel--send-key'
+call is considered interactive echo and redrawn immediately
+when the output size is below `ghostel-immediate-redraw-threshold'."
+  :type 'number)
+
+(defcustom ghostel-input-coalesce-delay 0.003
+  "Delay in seconds to coalesce rapid keystrokes before sending.
+When non-zero, keystrokes are buffered for up to this many seconds
+and sent as a single write to the PTY.  This reduces per-key
+syscall overhead during fast typing.  Set to 0 to disable."
+  :type 'number)
+
 (defcustom ghostel-full-redraw nil
   "When non-nil, always perform full redraws instead of incremental updates.
 Full redraws are more robust with TUI apps like Claude Code that do
@@ -548,6 +571,15 @@ DIR is the module directory."
 (defvar-local ghostel--resize-timer nil
   "Timer for debounced SIGWINCH on alt screen.")
 
+(defvar-local ghostel--last-send-time nil
+  "Time of the last `ghostel--send-key' call, for immediate-redraw detection.")
+
+(defvar-local ghostel--input-buffer nil
+  "Accumulated keystrokes waiting to be flushed to the PTY.")
+
+(defvar-local ghostel--input-timer nil
+  "Timer for flushing coalesced input.")
+
 
 
 
@@ -661,9 +693,41 @@ intercepted by Emacs (e.g., interrupt or prefix keys)."
           (message "ghostel: unrecognized key %S" key)))))))
 
 (defun ghostel--send-key (key)
-  "Send KEY string to the terminal process."
+  "Send KEY string to the terminal process.
+Records the send time for immediate-redraw detection and optionally
+coalesces rapid keystrokes when `ghostel-input-coalesce-delay' > 0."
   (when (and ghostel--process (process-live-p ghostel--process))
-    (process-send-string ghostel--process key)))
+    (setq ghostel--last-send-time (current-time))
+    (if (and (> ghostel-input-coalesce-delay 0)
+             (= (length key) 1))
+        ;; Coalesce single-char keystrokes
+        (progn
+          (push key ghostel--input-buffer)
+          (unless ghostel--input-timer
+            (setq ghostel--input-timer
+                  (run-with-timer ghostel-input-coalesce-delay nil
+                                  #'ghostel--flush-input (current-buffer)))))
+      ;; Multi-byte or coalescing disabled: send immediately
+      (when ghostel--input-timer
+        (cancel-timer ghostel--input-timer)
+        (setq ghostel--input-timer nil)
+        ;; Flush any buffered input first
+        (when ghostel--input-buffer
+          (process-send-string ghostel--process
+                               (apply #'concat (nreverse ghostel--input-buffer)))
+          (setq ghostel--input-buffer nil)))
+      (process-send-string ghostel--process key))))
+
+(defun ghostel--flush-input (buffer)
+  "Flush coalesced input in BUFFER to the PTY."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq ghostel--input-timer nil)
+      (when (and ghostel--input-buffer ghostel--process
+                 (process-live-p ghostel--process))
+        (process-send-string ghostel--process
+                             (apply #'concat (nreverse ghostel--input-buffer)))
+        (setq ghostel--input-buffer nil)))))
 
 (defun ghostel--send-encoded (key-name mods &optional utf8)
   "Encode KEY-NAME with MODS via the terminal's key encoder and send.
@@ -1573,14 +1637,31 @@ VT parser.")
   "Process filter: feed PTY output to the terminal.
 PROCESS is the shell process, OUTPUT is the raw byte string.
 Output is accumulated and fed to the terminal in a single batch
-when the redraw timer fires, reducing per-call VT parser overhead."
+when the redraw timer fires, reducing per-call VT parser overhead.
+
+For interactive echo (small output arriving shortly after a keystroke),
+the redraw is performed immediately to minimize typing latency."
   (when (buffer-live-p (process-buffer process))
     (with-current-buffer (process-buffer process)
       (when ghostel--term
         ;; Accumulate output for batched write-input at redraw time.
         (push output ghostel--pending-output)
-        ;; Schedule redraw (which will flush pending output first).
-        (ghostel--invalidate)))))
+        ;; Immediate redraw for interactive echo: small output arriving
+        ;; within `ghostel-immediate-redraw-interval' of last keystroke.
+        (if (and (> ghostel-immediate-redraw-threshold 0)
+                 ghostel--last-send-time
+                 (<= (length output) ghostel-immediate-redraw-threshold)
+                 (< (float-time (time-subtract (current-time)
+                                               ghostel--last-send-time))
+                    ghostel-immediate-redraw-interval))
+            (progn
+              ;; Cancel pending timer — we're drawing now.
+              (when ghostel--redraw-timer
+                (cancel-timer ghostel--redraw-timer)
+                (setq ghostel--redraw-timer nil))
+              (ghostel--delayed-redraw (current-buffer)))
+          ;; Bulk output: batch and schedule as before.
+          (ghostel--invalidate))))))
 
 (defun ghostel--sentinel (process event)
   "Process sentinel: clean up when shell exits.
@@ -1597,6 +1678,9 @@ PROCESS is the shell process, EVENT describes the state change."
         (when ghostel--resize-timer
           (cancel-timer ghostel--resize-timer)
           (setq ghostel--resize-timer nil))
+        (when ghostel--input-timer
+          (cancel-timer ghostel--input-timer)
+          (setq ghostel--input-timer nil))
         (remove-function after-focus-change-function #'ghostel--focus-change)
         (run-hook-with-args 'ghostel-exit-functions buf event)
         (if ghostel-kill-buffer-on-exit

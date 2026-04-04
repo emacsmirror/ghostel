@@ -197,6 +197,8 @@ Soft-wrapped newlines are automatically stripped from copied text.
 ### Rendering
 - Incremental redraw — only dirty rows are re-rendered
 - Timer-based batched updates with adaptive frame rate
+- **Immediate redraw** for interactive typing echo — small PTY output arriving shortly after a keystroke bypasses the timer, eliminating 16–33ms of latency per keypress
+- **Input coalescing** — rapid keystrokes are batched into a single PTY write to reduce syscall overhead
 - Cursor position updates even without cell changes
 - Theme-aware color palette (syncs with Emacs theme via `ghostel-sync-theme`)
 
@@ -267,6 +269,9 @@ individual faces with `M-x customize-face`.
 | `ghostel-max-scrollback`         | `10000`              | Maximum scrollback lines                                 |
 | `ghostel-timer-delay`            | `0.033`              | Base redraw delay in seconds (~30fps)                    |
 | `ghostel-adaptive-fps`           | `t`                  | Adaptive frame rate (shorter delay after idle, stop timer when idle) |
+| `ghostel-immediate-redraw-threshold` | `256`            | Max output bytes to trigger immediate redraw (0 to disable) |
+| `ghostel-immediate-redraw-interval`  | `0.05`           | Max seconds since last keystroke for immediate redraw    |
+| `ghostel-input-coalesce-delay`   | `0.003`              | Seconds to buffer rapid keystrokes before sending (0 to disable) |
 | `ghostel-full-redraw`            | `nil`                | Always do full redraws instead of incremental updates    |
 | `ghostel-kill-buffer-on-exit`    | `t`                  | Kill buffer when shell exits                             |
 | `ghostel-eval-cmds`              | `(see above)`        | Whitelisted functions for OSC 51 eval                    |
@@ -290,6 +295,7 @@ individual faces with `M-x customize-face`.
 | `M-x ghostel-next-prompt`      | Jump to next shell prompt                    |
 | `M-x ghostel-previous-prompt`  | Jump to previous shell prompt                |
 | `M-x ghostel-force-redraw`     | Force a full terminal redraw                 |
+| `M-x ghostel-debug-typing-latency` | Measure per-keystroke typing latency     |
 | `M-x ghostel-sync-theme`       | Re-sync color palette after theme change     |
 | `M-x ghostel-download-module`  | Download pre-built native module             |
 | `M-x ghostel-module-compile`   | Compile native module from source            |
@@ -338,11 +344,27 @@ The "no detect" row shows throughput with this detection disabled
 emulators do not have this feature, so their numbers are comparable to the "no
 detect" row.
 
+### Typing latency
+
+Interactive keystrokes are optimized separately from bulk throughput.  When
+you type a character, the PTY echo is detected and rendered immediately
+(bypassing the 33ms redraw timer), so the character appears on screen with
+minimal delay.  Use `M-x ghostel-debug-typing-latency` to measure the
+end-to-end latency on your system — it reports per-keystroke PTY, render,
+and total latency with min/median/p99/max statistics.
+
 Run the benchmarks yourself:
 
 ```sh
-bench/run-bench.sh              # full suite
+bench/run-bench.sh              # full suite (throughput)
 bench/run-bench.sh --quick      # quick sanity check
+```
+
+The typing latency benchmark can be run from Elisp:
+
+```elisp
+(require 'ghostel-debug)
+M-x ghostel-debug-typing-latency    ; interactive measurement
 ```
 
 ## Ghostel vs vterm

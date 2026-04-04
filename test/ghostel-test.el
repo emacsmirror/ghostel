@@ -1087,6 +1087,158 @@ cell, so the visual line width must equal the terminal column count."
       (ghostel--check-module-version "/tmp")
       (should-not warned))))
 
+;; -----------------------------------------------------------------------
+;; Test: immediate redraw for interactive echo
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-immediate-redraw-triggers-on-small-echo ()
+  "Small output after recent send-key triggers immediate redraw."
+  (with-temp-buffer
+    (let ((buf (current-buffer))
+          (ghostel--term 'fake)
+          (ghostel--pending-output nil)
+          (ghostel--redraw-timer nil)
+          (ghostel--last-send-time nil)
+          (ghostel-immediate-redraw-threshold 256)
+          (ghostel-immediate-redraw-interval 0.05)
+          (immediate-called nil)
+          (invalidate-called nil))
+      ;; Stub out process-buffer, delayed-redraw, and invalidate
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buf))
+                ((symbol-function 'ghostel--delayed-redraw)
+                 (lambda (_buf) (setq immediate-called t)))
+                ((symbol-function 'ghostel--invalidate)
+                 (lambda () (setq invalidate-called t))))
+        ;; Simulate recent keystroke
+        (setq ghostel--last-send-time (current-time))
+        ;; Simulate small echo arriving
+        (ghostel--filter 'fake-proc "a")
+        (should immediate-called)
+        (should-not invalidate-called)))))
+
+(ert-deftest ghostel-test-immediate-redraw-skips-large-output ()
+  "Large output falls back to timer-based batching."
+  (with-temp-buffer
+    (let ((buf (current-buffer))
+          (ghostel--term 'fake)
+          (ghostel--pending-output nil)
+          (ghostel--redraw-timer nil)
+          (ghostel--last-send-time (current-time))
+          (ghostel-immediate-redraw-threshold 256)
+          (ghostel-immediate-redraw-interval 0.05)
+          (immediate-called nil)
+          (invalidate-called nil))
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buf))
+                ((symbol-function 'ghostel--delayed-redraw)
+                 (lambda (_buf) (setq immediate-called t)))
+                ((symbol-function 'ghostel--invalidate)
+                 (lambda () (setq invalidate-called t))))
+        ;; Large output should batch
+        (ghostel--filter 'fake-proc (make-string 500 ?x))
+        (should-not immediate-called)
+        (should invalidate-called)))))
+
+(ert-deftest ghostel-test-immediate-redraw-skips-stale-send ()
+  "Output arriving long after last keystroke uses timer batching."
+  (with-temp-buffer
+    (let ((buf (current-buffer))
+          (ghostel--term 'fake)
+          (ghostel--pending-output nil)
+          (ghostel--redraw-timer nil)
+          (ghostel--last-send-time (time-subtract (current-time) 1))
+          (ghostel-immediate-redraw-threshold 256)
+          (ghostel-immediate-redraw-interval 0.05)
+          (immediate-called nil)
+          (invalidate-called nil))
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buf))
+                ((symbol-function 'ghostel--delayed-redraw)
+                 (lambda (_buf) (setq immediate-called t)))
+                ((symbol-function 'ghostel--invalidate)
+                 (lambda () (setq invalidate-called t))))
+        (ghostel--filter 'fake-proc "a")
+        (should-not immediate-called)
+        (should invalidate-called)))))
+
+(ert-deftest ghostel-test-immediate-redraw-disabled-when-zero ()
+  "Immediate redraw is disabled when threshold is 0."
+  (with-temp-buffer
+    (let ((buf (current-buffer))
+          (ghostel--term 'fake)
+          (ghostel--pending-output nil)
+          (ghostel--redraw-timer nil)
+          (ghostel--last-send-time (current-time))
+          (ghostel-immediate-redraw-threshold 0)
+          (ghostel-immediate-redraw-interval 0.05)
+          (immediate-called nil)
+          (invalidate-called nil))
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buf))
+                ((symbol-function 'ghostel--delayed-redraw)
+                 (lambda (_buf) (setq immediate-called t)))
+                ((symbol-function 'ghostel--invalidate)
+                 (lambda () (setq invalidate-called t))))
+        (ghostel--filter 'fake-proc "a")
+        (should-not immediate-called)
+        (should invalidate-called)))))
+
+;; -----------------------------------------------------------------------
+;; Test: input coalescing
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-input-coalesce-buffers-single-chars ()
+  "Single-char sends are buffered when coalescing is enabled."
+  (with-temp-buffer
+    (let* ((ghostel--process nil)
+           (ghostel--input-buffer nil)
+           (ghostel--input-timer nil)
+           (ghostel--last-send-time nil)
+           (ghostel-input-coalesce-delay 0.003)
+           (sent nil))
+      ;; Create a mock process
+      (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+                ((symbol-function 'process-send-string)
+                 (lambda (_proc str) (push str sent)))
+                ((symbol-function 'run-with-timer)
+                 (lambda (_delay _repeat fn &rest args)
+                   ;; Return a fake timer but call function for test
+                   'fake-timer)))
+        (setq ghostel--process 'fake)
+        (ghostel--send-key "a")
+        ;; Should be buffered, not sent
+        (should (equal ghostel--input-buffer '("a")))
+        (should-not sent)))))
+
+(ert-deftest ghostel-test-input-coalesce-disabled ()
+  "With coalesce delay 0, characters are sent immediately."
+  (with-temp-buffer
+    (let* ((ghostel--process nil)
+           (ghostel--input-buffer nil)
+           (ghostel--input-timer nil)
+           (ghostel--last-send-time nil)
+           (ghostel-input-coalesce-delay 0)
+           (sent nil))
+      (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+                ((symbol-function 'process-send-string)
+                 (lambda (_proc str) (push str sent))))
+        (setq ghostel--process 'fake)
+        (ghostel--send-key "a")
+        (should (member "a" sent))
+        (should-not ghostel--input-buffer)))))
+
+(ert-deftest ghostel-test-input-flush-sends-buffered ()
+  "Flushing input buffer sends concatenated characters."
+  (with-temp-buffer
+    (let* ((ghostel--process nil)
+           (ghostel--input-buffer '("c" "b" "a"))
+           (ghostel--input-timer nil)
+           (sent nil))
+      (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+                ((symbol-function 'process-send-string)
+                 (lambda (_proc str) (push str sent))))
+        (setq ghostel--process 'fake)
+        (ghostel--flush-input (current-buffer))
+        (should (equal sent '("abc")))
+        (should-not ghostel--input-buffer)))))
+
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
@@ -1104,7 +1256,14 @@ cell, so the visual line width must equal the terminal column count."
     ghostel-test-elisp-version
     ghostel-test-module-version-match
     ghostel-test-module-version-mismatch
-    ghostel-test-module-version-newer-than-minimum)
+    ghostel-test-module-version-newer-than-minimum
+    ghostel-test-immediate-redraw-triggers-on-small-echo
+    ghostel-test-immediate-redraw-skips-large-output
+    ghostel-test-immediate-redraw-skips-stale-send
+    ghostel-test-immediate-redraw-disabled-when-zero
+    ghostel-test-input-coalesce-buffers-single-chars
+    ghostel-test-input-coalesce-disabled
+    ghostel-test-input-flush-sends-buffered)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()
