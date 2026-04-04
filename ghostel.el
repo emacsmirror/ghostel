@@ -1653,10 +1653,11 @@ PROCESS is the shell process, EVENT describes the state change."
   "Return non-nil if HOST refers to the local machine."
   (or (null host)
       (string= host "")
-      (string-equal-ignore-case host "localhost")
-      (string-equal-ignore-case host (system-name))
-      (string-equal-ignore-case
-       host (car (split-string (system-name) "\\.")))))
+      (eq t (compare-strings host nil nil "localhost" nil nil t))
+      (eq t (compare-strings host nil nil (system-name) nil nil t))
+      (eq t (compare-strings
+             host nil nil
+             (car (split-string (system-name) "\\.")) nil nil t))))
 
 (defun ghostel--tramp-get-shell (method)
   "Get the shell for TRAMP METHOD from `ghostel-tramp-shells'.
