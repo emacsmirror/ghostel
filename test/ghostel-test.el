@@ -1109,9 +1109,9 @@ cell, so the visual line width must equal the terminal column count."
     (should (equal "/ssh:remote-host:/home/user/" default-directory)))
   ;; Preserves method from existing TRAMP default-directory
   (let ((ghostel--last-directory nil)
-        (default-directory "/docker:container:/"))
-    (ghostel--update-directory "file://container/app")
-    (should (equal "/docker:container:/app/" default-directory)))
+        (default-directory "/scp:server:/"))
+    (ghostel--update-directory "file://server/app")
+    (should (equal "/scp:server:/app/" default-directory)))
   ;; Preserves user from existing TRAMP default-directory
   (let ((ghostel--last-directory nil)
         (default-directory "/ssh:dan@myhost:/tmp/"))
