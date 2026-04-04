@@ -81,6 +81,7 @@
 (require 'term)
 (require 'url-parse)
 (require 'face-remap)
+(require 'tramp)
 
 
 ;;; Customization
@@ -93,6 +94,21 @@
 (defcustom ghostel-shell (or (getenv "SHELL") "/bin/sh")
   "Shell program to run in the terminal."
   :type 'string)
+
+(defcustom ghostel-tramp-shells
+  '(("ssh" login-shell)
+    ("scp" login-shell)
+    ("docker" "/bin/sh"))
+  "Shell to use for remote TRAMP connections, per method.
+Each entry is (TRAMP-METHOD SHELL ...).  TRAMP-METHOD is a method
+string such as \"ssh\" or \"docker\", or t as a catch-all default.
+
+SHELL is either a path string like \"/bin/bash\" or the symbol
+`login-shell' to auto-detect the remote user's login shell via
+`getent passwd'.  An optional second element serves as fallback
+when login-shell detection fails."
+  :type '(alist :key-type (choice string (const t))
+                :value-type (repeat (choice string (const login-shell)))))
 
 (defcustom ghostel-max-scrollback 10000
   "Maximum number of scrollback lines."
@@ -1476,14 +1492,34 @@ VISIBLE is t or nil."
 
 (defun ghostel--update-directory (dir)
   "Update `default-directory' from terminal's OSC 7 report.
-DIR may be a file:// URL or a plain path."
+DIR may be a file:// URL or a plain path.  When the hostname in a
+file:// URL does not match the local machine, construct a TRAMP path."
   (when (and dir (not (equal dir ghostel--last-directory)))
     (setq ghostel--last-directory dir)
-    (let ((path (if (string-prefix-p "file://" dir)
-                    (url-filename (url-generic-parse-url dir))
-                  dir)))
-      (when (and path (file-directory-p path))
-        (setq default-directory (file-name-as-directory path))))))
+    (let (path)
+      (if (string-prefix-p "file://" dir)
+          (let* ((url (url-generic-parse-url dir))
+                 (host (url-host url))
+                 (filename (url-filename url)))
+            (if (ghostel--local-host-p host)
+                (setq path filename)
+              ;; Remote host — construct a TRAMP path.
+              ;; Reuse method/user from current default-directory if
+              ;; already remote, otherwise default to ssh.
+              (let ((method (or (file-remote-p default-directory 'method)
+                                "ssh"))
+                    (user (file-remote-p default-directory 'user)))
+                (setq path (if user
+                               (format "/%s:%s@%s:%s" method user host filename)
+                             (format "/%s:%s:%s" method host filename))))))
+        (setq path dir))
+      (when (and path (not (string= path "")))
+        (if (file-remote-p path)
+            ;; Trust the shell's report; skip file-directory-p to avoid
+            ;; synchronous TRAMP connections on every cd.
+            (setq default-directory (file-name-as-directory path))
+          (when (file-directory-p path)
+            (setq default-directory (file-name-as-directory path))))))))
 
 
 ;;; Palette
@@ -1613,16 +1649,65 @@ PROCESS is the shell process, EVENT describes the state change."
      ((string-match-p "zsh" base) 'zsh)
      ((string-match-p "fish" base) 'fish))))
 
+(defun ghostel--local-host-p (host)
+  "Return non-nil if HOST refers to the local machine."
+  (or (null host)
+      (string= host "")
+      (string-equal-ignore-case host "localhost")
+      (string-equal-ignore-case host (system-name))
+      (string-equal-ignore-case
+       host (car (split-string (system-name) "\\.")))))
+
+(defun ghostel--tramp-get-shell (method)
+  "Get the shell for TRAMP METHOD from `ghostel-tramp-shells'.
+METHOD is a TRAMP method string or t for the default."
+  (let* ((specs (cdr (assoc method ghostel-tramp-shells)))
+         (first (car specs))
+         (second (cadr specs)))
+    (if (eq first 'login-shell)
+        (let* ((entry (ignore-errors
+                        (with-output-to-string
+                          (with-current-buffer standard-output
+                            (unless (= 0 (process-file-shell-command
+                                          "getent passwd $LOGNAME"
+                                          nil (current-buffer) nil))
+                              (error "Unexpected return value"))
+                            (when (> (count-lines (point-min) (point-max)) 1)
+                              (error "Unexpected output"))))))
+               (shell (when entry
+                        (nth 6 (split-string entry ":" nil "[ \t\n\r]+")))))
+          (or shell second))
+      first)))
+
+(defun ghostel--get-shell ()
+  "Get the shell to run, respecting TRAMP remote connections.
+When `default-directory' is a remote TRAMP path, consult
+`ghostel-tramp-shells' for the appropriate shell."
+  (if (file-remote-p default-directory)
+      (with-parsed-tramp-file-name default-directory nil
+        (or (ghostel--tramp-get-shell method)
+            (ghostel--tramp-get-shell t)
+            (with-connection-local-variables shell-file-name)
+            ghostel-shell))
+    ghostel-shell))
+
 (defun ghostel--start-process ()
-  "Start the shell process with a PTY."
+  "Start the shell process with a PTY.
+When `default-directory' is a remote TRAMP path, spawn the shell
+on the remote host."
   (let* ((height (max 1 (window-body-height)))
          (width (max 1 (window-max-chars-per-line)))
-         (ghostel-dir (file-name-directory
-                       (or (locate-library "ghostel")
-                           load-file-name buffer-file-name
-                           default-directory)))
-         (shell-type (and ghostel-shell-integration
-                          (ghostel--detect-shell ghostel-shell)))
+         (remote-p (file-remote-p default-directory))
+         (shell (ghostel--get-shell))
+         (ghostel-dir (unless remote-p
+                        (file-name-directory
+                         (or (locate-library "ghostel")
+                             load-file-name buffer-file-name
+                             default-directory))))
+         ;; Shell integration is only available locally.
+         (shell-type (and (not remote-p)
+                          ghostel-shell-integration
+                          (ghostel--detect-shell shell)))
          (integration-env
           (pcase shell-type
             ('bash
@@ -1663,17 +1748,18 @@ PROCESS is the shell process, EVENT describes the state change."
                             integ-dir))))))))
          ;; Only add --posix when bash injection actually succeeded.
          (shell-command (if (and (eq shell-type 'bash) integration-env)
-                            (list ghostel-shell "--posix")
-                          (list ghostel-shell)))
+                            (list shell "--posix")
+                          (list shell)))
          (process-environment
           (append
            (list
             "INSIDE_EMACS=ghostel"
-            (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)
             "TERM=xterm-256color"
             "COLORTERM=truecolor"
             (format "COLUMNS=%d" width)
             (format "LINES=%d" height))
+           (unless remote-p
+             (list (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)))
            integration-env
            process-environment))
          (proc (make-process
@@ -1681,6 +1767,7 @@ PROCESS is the shell process, EVENT describes the state change."
                 :buffer (current-buffer)
                 :command shell-command
                 :connection-type 'pty
+                :file-handler t
                 :filter #'ghostel--filter
                 :sentinel #'ghostel--sentinel)))
     (setq ghostel--process proc)
@@ -1697,7 +1784,7 @@ PROCESS is the shell process, EVENT describes the state change."
     ;; integration script handles echo; we still set iutf8 here.
     ;; Leading space keeps it out of history (HISTCONTROL=ignorespace).
     ;; The clear-screen sequence (\e[H\e[2J) hides the command itself.
-    (let ((stty-cmd (if (and (eq (ghostel--detect-shell ghostel-shell) 'bash)
+    (let ((stty-cmd (if (and (eq (ghostel--detect-shell shell) 'bash)
                              (not integration-env))
                         "stty iutf8 echo"
                       "stty iutf8")))

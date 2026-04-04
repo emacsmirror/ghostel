@@ -1087,6 +1087,43 @@ cell, so the visual line width must equal the terminal column count."
       (ghostel--check-module-version "/tmp")
       (should-not warned))))
 
+;; -----------------------------------------------------------------------
+;; Test: TRAMP integration
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-local-host-p ()
+  "Test local hostname detection."
+  (should (ghostel--local-host-p nil))
+  (should (ghostel--local-host-p ""))
+  (should (ghostel--local-host-p "localhost"))
+  (should (ghostel--local-host-p (system-name)))
+  (should (ghostel--local-host-p (car (split-string (system-name) "\\."))))
+  (should-not (ghostel--local-host-p "remote-server.example.com")))
+
+(ert-deftest ghostel-test-update-directory-remote ()
+  "Test TRAMP path construction from remote OSC 7."
+  ;; Remote hostname -> TRAMP ssh path
+  (let ((ghostel--last-directory nil)
+        (default-directory "/tmp/"))
+    (ghostel--update-directory "file://remote-host/home/user")
+    (should (equal "/ssh:remote-host:/home/user/" default-directory)))
+  ;; Preserves method from existing TRAMP default-directory
+  (let ((ghostel--last-directory nil)
+        (default-directory "/docker:container:/"))
+    (ghostel--update-directory "file://container/app")
+    (should (equal "/docker:container:/app/" default-directory)))
+  ;; Preserves user from existing TRAMP default-directory
+  (let ((ghostel--last-directory nil)
+        (default-directory "/ssh:dan@myhost:/tmp/"))
+    (ghostel--update-directory "file://myhost/home/dan")
+    (should (equal "/ssh:dan@myhost:/home/dan/" default-directory))))
+
+(ert-deftest ghostel-test-get-shell-local ()
+  "Test that local shell resolution returns `ghostel-shell'."
+  (let ((default-directory "/tmp/")
+        (ghostel-shell "/bin/zsh"))
+    (should (equal "/bin/zsh" (ghostel--get-shell)))))
+
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
@@ -1104,7 +1141,10 @@ cell, so the visual line width must equal the terminal column count."
     ghostel-test-elisp-version
     ghostel-test-module-version-match
     ghostel-test-module-version-mismatch
-    ghostel-test-module-version-newer-than-minimum)
+    ghostel-test-module-version-newer-than-minimum
+    ghostel-test-local-host-p
+    ghostel-test-update-directory-remote
+    ghostel-test-get-shell-local)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()
