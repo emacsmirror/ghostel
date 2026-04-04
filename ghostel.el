@@ -100,15 +100,17 @@
     ("scp" login-shell)
     ("docker" "/bin/sh"))
   "Shell to use for remote TRAMP connections, per method.
-Each entry is (TRAMP-METHOD SHELL ...).  TRAMP-METHOD is a method
-string such as \"ssh\" or \"docker\", or t as a catch-all default.
+Each entry is (TRAMP-METHOD SHELL [FALLBACK]).  TRAMP-METHOD is a
+method string such as \"ssh\" or \"docker\", or t as a catch-all default.
 
 SHELL is either a path string like \"/bin/bash\" or the symbol
 `login-shell' to auto-detect the remote user's login shell via
-`getent passwd'.  An optional second element serves as fallback
-when login-shell detection fails."
+`getent passwd'.  FALLBACK, when present, is used when login-shell
+detection fails."
   :type '(alist :key-type (choice string (const t))
-                :value-type (repeat (choice string (const login-shell)))))
+                :value-type
+                (list (choice string (const login-shell))
+                      (choice (const :tag "No fallback" nil) string))))
 
 (defcustom ghostel-max-scrollback 10000
   "Maximum number of scrollback lines."
@@ -1504,14 +1506,12 @@ file:// URL does not match the local machine, construct a TRAMP path."
             (if (ghostel--local-host-p host)
                 (setq path filename)
               ;; Remote host — construct a TRAMP path.
-              ;; Reuse method/user from current default-directory if
-              ;; already remote, otherwise default to ssh.
-              (let ((method (or (file-remote-p default-directory 'method)
-                                "ssh"))
-                    (user (file-remote-p default-directory 'user)))
-                (setq path (if user
-                               (format "/%s:%s@%s:%s" method user host filename)
-                             (format "/%s:%s:%s" method host filename))))))
+              ;; Reuse the full remote prefix from default-directory
+              ;; when available (preserves multi-hop, method, user).
+              (let ((prefix (file-remote-p default-directory)))
+                (setq path (if prefix
+                               (concat prefix filename)
+                             (format "/ssh:%s:%s" host filename))))))
         (setq path dir))
       (when (and path (not (string= path "")))
         (if (file-remote-p path)
@@ -1768,7 +1768,7 @@ on the remote host."
                 :buffer (current-buffer)
                 :command shell-command
                 :connection-type 'pty
-                :file-handler t
+                :file-handler remote-p
                 :filter #'ghostel--filter
                 :sentinel #'ghostel--sentinel)))
     (setq ghostel--process proc)
