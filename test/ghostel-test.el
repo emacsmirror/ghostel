@@ -1156,6 +1156,91 @@ cell, so the visual line width must equal the terminal column count."
         (kill-buffer buf)))))
 
 ;; -----------------------------------------------------------------------
+;; Test: copy-mode-load-all state management
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-copy-mode-load-all ()
+  "Test that `ghostel-copy-mode-load-all' sets full-buffer state."
+  (let ((buf (generate-new-buffer " *ghostel-test-load-all*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (let ((ghostel--copy-mode-active nil)
+                (ghostel--redraw-timer nil)
+                (ghostel--term 'fake-term))
+            ;; Enter copy mode
+            (ghostel-copy-mode)
+            (should ghostel--copy-mode-active)              ; in copy mode
+            (should-not ghostel--copy-mode-full-buffer)     ; not full yet
+            ;; Stub the native function and recenter (no window in batch).
+            ;; The stub must NOT bind inhibit-read-only itself — the real
+            ;; native function doesn't, so the caller must have it set.
+            (cl-letf (((symbol-function 'ghostel--redraw-full-scrollback)
+                       (lambda (_term)
+                         (erase-buffer)
+                         (insert "line1\nline2\nline3\nline4\nline5")
+                         3))
+                      ((symbol-function 'recenter) #'ignore))
+              (ghostel-copy-mode-load-all)
+              (should ghostel--copy-mode-full-buffer)       ; now full
+              ;; Point should be on line 3 (the returned viewport line)
+              (should (= 3 (line-number-at-pos))))
+            ;; Exit resets full-buffer state
+            (cl-letf (((symbol-function 'ghostel--scroll-bottom) #'ignore)
+                      ((symbol-function 'ghostel--redraw) #'ignore))
+              (ghostel-copy-mode-exit))
+            (should-not ghostel--copy-mode-full-buffer)))   ; reset on exit
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
+;; Test: ghostel-copy-all copies to kill ring
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-copy-all ()
+  "Test that `ghostel-copy-all' puts text into the kill ring."
+  (let ((buf (generate-new-buffer " *ghostel-test-copy-all*"))
+        (old-kill kill-ring))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (let ((ghostel--term 'fake-term))
+            (cl-letf (((symbol-function 'ghostel--copy-all-text)
+                       (lambda (_term) "hello world")))
+              (ghostel-copy-all)
+              (should (equal "hello world" (car kill-ring))))))
+      (setq kill-ring old-kill)
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
+;; Test: copy-mode scroll commands in full-buffer mode
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-copy-mode-full-buffer-scroll ()
+  "Test that scroll commands use Emacs navigation in full-buffer mode."
+  (let ((buf (generate-new-buffer " *ghostel-test-full-scroll*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (let ((ghostel--copy-mode-active t)
+                (ghostel--copy-mode-full-buffer t)
+                (ghostel--term 'fake-term)
+                (inhibit-read-only t))
+            ;; Insert content
+            (insert (mapconcat #'number-to-string (number-sequence 1 20) "\n"))
+            (goto-char (point-min))
+            ;; Test beginning/end of buffer
+            (ghostel-copy-mode-end-of-buffer)
+            (should (= (point) (point-max)))                ; jumped to end
+            (ghostel-copy-mode-beginning-of-buffer)
+            (should (= (point) (point-min)))                ; jumped to beginning
+            ;; Test line navigation
+            (ghostel-copy-mode-next-line)
+            (should (= 2 (line-number-at-pos)))             ; moved to line 2
+            (ghostel-copy-mode-previous-line)
+            (should (= 1 (line-number-at-pos)))))           ; moved back to line 1
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
 ;; Runner
 ;; -----------------------------------------------------------------------
 
@@ -1420,6 +1505,9 @@ cell, so the visual line width must equal the terminal column count."
     ghostel-test-osc51-eval-unknown
     ghostel-test-copy-mode-cursor
     ghostel-test-copy-mode-hl-line
+    ghostel-test-copy-mode-load-all
+    ghostel-test-copy-all
+    ghostel-test-copy-mode-full-buffer-scroll
     ghostel-test-elisp-version
     ghostel-test-module-version-match
     ghostel-test-module-version-mismatch
