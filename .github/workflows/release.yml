@@ -85,6 +85,10 @@ jobs:
       - name: Build native module
         run: ./build.sh
 
+      - name: Strip non-exported symbols (macOS)
+        if: runner.os == 'macOS'
+        run: strip -x ghostel-module${{ matrix.suffix }}
+
       - name: Rename artifact for release
         run: |
           mv ghostel-module${{ matrix.suffix }} \

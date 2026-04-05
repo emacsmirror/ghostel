@@ -4,11 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const is_release = optimize != .Debug;
     const mod = b.createModule(.{
         .root_source_file = b.path("src/module.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = if (is_release) true else null,
+        .omit_frame_pointer = if (is_release) true else null,
     });
 
     // Emacs module header — check EMACS_INCLUDE_DIR env, then platform defaults
@@ -42,6 +45,18 @@ pub fn build(b: *std.Build) void {
     lib.addObjectFile(b.path("vendor/ghostty/zig-out/lib/libsimdutf.a"));
     lib.addObjectFile(b.path("vendor/ghostty/zig-out/lib/libhighway.a"));
     lib.linkSystemLibrary("c++");
+
+    // Release optimizations: dead-code elimination and symbol visibility
+    if (is_release) {
+        lib.link_gc_sections = true;
+        lib.link_function_sections = true;
+        lib.link_data_sections = true;
+        lib.dead_strip_dylibs = true;
+
+        if (target.result.os.tag == .linux) {
+            lib.setVersionScript(b.path("symbols.map"));
+        }
+    }
 
     b.installArtifact(lib);
 
