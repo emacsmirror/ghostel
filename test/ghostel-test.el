@@ -1430,6 +1430,19 @@ cell, so the visual line width must equal the terminal column count."
   ;; C-@ should also be bound (sends NUL)
   (should (lookup-key ghostel-mode-map (kbd "C-@"))))
 
+(ert-deftest ghostel-test-meta-key-bindings ()
+  "All non-exception M-<letter> keys should be bound in ghostel-mode-map."
+  (dolist (c (number-sequence ?a ?z))
+    (let* ((key-str (format "M-%c" c))
+           (key-vec (kbd key-str))
+           (binding (lookup-key ghostel-mode-map key-vec)))
+      (unless (eq c ?y)  ; M-y is ghostel-yank-pop
+        (if (member key-str ghostel-keymap-exceptions)
+            (should-not (eq binding #'ghostel--send-event))
+          (should (eq binding #'ghostel--send-event))))))
+  ;; M-y should be bound to ghostel-yank-pop, not send-event
+  (should (eq (lookup-key ghostel-mode-map (kbd "M-y")) #'ghostel-yank-pop)))
+
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
@@ -1458,7 +1471,8 @@ cell, so the visual line width must equal the terminal column count."
     ghostel-test-input-flush-sends-buffered
     ghostel-test-send-encoded-sets-send-time
     ghostel-test-send-encoded-no-send-time-on-fallback
-    ghostel-test-control-key-bindings)
+    ghostel-test-control-key-bindings
+    ghostel-test-meta-key-bindings)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()

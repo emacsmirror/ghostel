@@ -621,6 +621,12 @@ Used for prompt navigation and optional re-application after full redraws.")
                         (let ((code (- c 96)))
                           (lambda () (interactive)
                             (ghostel--send-key (string code)))))))))
+    ;; Meta keys — bind all M-<letter> so they reach the terminal
+    ;; instead of running Emacs commands like forward-word.
+    (dolist (c (number-sequence ?a ?z))
+      (let ((key-str (format "M-%c" c)))
+        (unless (member key-str ghostel-keymap-exceptions)
+          (define-key map (kbd key-str) #'ghostel--send-event))))
     ;; C-@ (NUL, same as C-SPC) — used by programs like Emacs-in-terminal
     (define-key map (kbd "C-@")
                 (lambda () (interactive) (ghostel--send-key "\x00")))
@@ -749,6 +755,11 @@ Returns the sequence string, or nil for unknown keys."
            (<= ?a (aref key-name 0)) (<= (aref key-name 0) ?z)
            (> (logand mod-num 4) 0))        ; ctrl bit
       (string (- (aref key-name 0) 96)))    ; ctrl-a=1, ctrl-z=26
+     ;; Meta + single letter → ESC + char
+     ((and (= (length key-name) 1)
+           (<= ?a (aref key-name 0)) (<= (aref key-name 0) ?z)
+           (> (logand mod-num 2) 0))        ; alt/meta bit
+      (format "\e%c" (aref key-name 0)))
      ;; Simple special keys (CSI u encoding for modified variants)
      ((string= key-name "backspace") (if (> mod-num 0) (format "\e[127;%du" (1+ mod-num)) "\x7f"))
      ((string= key-name "return")    (if (> mod-num 0) (format "\e[13;%du" (1+ mod-num)) "\r"))
