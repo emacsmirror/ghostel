@@ -1984,7 +1984,6 @@ With a numeric prefix ARG, switch to the buffer with that number or
 create it if it doesn't exist yet.
 The name of the buffer is determined by the value of `ghostel-buffer-name'."
   (interactive "P")
-  (cl-assert ghostel-buffer-name)
   (unless (fboundp 'ghostel--new)
     (let ((dir (file-name-directory (locate-library "ghostel"))))
       (ghostel--ensure-module dir)
@@ -1994,14 +1993,13 @@ The name of the buffer is determined by the value of `ghostel-buffer-name'."
             (module-load mod)
           (user-error "Ghostel native module not available")))))
   (let ((buffer (cond ((numberp arg)
-		       (get-buffer-create (format "%s<%d>"
-						  ghostel-buffer-name
-						  arg)))
-		      (arg
-		       (generate-new-buffer ghostel-buffer-name))
-		      (t
-		       (get-buffer-create ghostel-buffer-name)))))
-    (cl-assert (and buffer (buffer-live-p buffer)))
+                       (get-buffer-create (format "%s<%d>"
+                                                  ghostel-buffer-name
+                                                  arg)))
+                      (arg
+                       (generate-new-buffer ghostel-buffer-name))
+                      (t
+                       (get-buffer-create ghostel-buffer-name)))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'ghostel-mode)
         (ghostel-mode)
@@ -2015,19 +2013,19 @@ The name of the buffer is determined by the value of `ghostel-buffer-name'."
     (switch-to-buffer buffer)))
 
 ;;;###autoload
-(defun ghostel-project ()
+(defun ghostel-project (&optional arg)
   "Start a new Ghostel terminal in the current project's root.
 The buffer name is prefixed with the project name.
-If a buffer already exists for this project switch to it.
+If a buffer already exists for this project, switch to it.
 Otherwise create a new Ghostel buffer. This function accepts the same
 universal arguments that `ghostel' does.
 To add this to `project-switch-commands':
   (add-to-list \\='project-switch-commands \\='(ghostel-project \"Ghostel\") t)"
-  (interactive)
+  (interactive "P")
   (let ((default-directory (project-root (project-current t)))
         (ghostel-buffer-name (project-prefixed-buffer-name
                               (string-trim ghostel-buffer-name "*" "*"))))
-    (ghostel current-prefix-arg)))
+    (ghostel arg)))
 
 (defun ghostel-other ()
   "Switch to the next ghostel terminal buffer, or create one."

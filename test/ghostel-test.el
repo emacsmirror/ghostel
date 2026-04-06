@@ -1215,10 +1215,9 @@ cell, so the visual line width must equal the terminal column count."
 (ert-deftest ghostel-test-project-universal-arg ()
   "Test that `ghostel-project' passes the universal arg to `ghostel'."
   (require 'project)
+  ;; Numeric prefix arg (C-5 M-x ghostel-project)
   (let ((ghostel-buffer-name "*ghostel*")
-	(current-prefix-arg '4)
         result)
-    ;; Stub project-current, project-root, and ghostel to capture args
     (cl-letf (((symbol-function 'project-current)
                (lambda (_maybe-prompt) '(transient . "/tmp/myproj/")))
               ((symbol-function 'project-root)
@@ -1226,9 +1225,20 @@ cell, so the visual line width must equal the terminal column count."
               ((symbol-function 'ghostel)
                (lambda (&optional arg)
                  (setq result arg))))
-      (ghostel-project)
-      ;; Pass the prefix argument to `ghostel'
-      (should (equal '4 result)))))
+      (ghostel-project 4)
+      (should (equal 4 result))))
+  ;; Universal prefix arg (C-u M-x ghostel-project)
+  (let ((ghostel-buffer-name "*ghostel*")
+        result)
+    (cl-letf (((symbol-function 'project-current)
+               (lambda (_maybe-prompt) '(transient . "/tmp/myproj/")))
+              ((symbol-function 'project-root)
+               (lambda (proj) (cdr proj)))
+              ((symbol-function 'ghostel)
+               (lambda (&optional arg)
+                 (setq result arg))))
+      (ghostel-project '(4))
+      (should (equal '(4) result)))))
 
 ;; -----------------------------------------------------------------------
 ;; Runner
