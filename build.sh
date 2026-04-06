@@ -9,6 +9,21 @@ set -e
 
 cd "$(dirname "$0")"
 
+# Parse options
+ZIG_TARGET=""
+while getopts "t:" opt; do
+    case "$opt" in
+        t) ZIG_TARGET="$OPTARG" ;;
+        *) echo "Usage: $0 [-t zig-target-triple]"; exit 1 ;;
+    esac
+done
+
+# Build target flags for zig
+ZIG_TARGET_FLAG=""
+if [ -n "$ZIG_TARGET" ]; then
+    ZIG_TARGET_FLAG="-Dtarget=$ZIG_TARGET"
+fi
+
 # Check submodule
 if [ ! -f vendor/ghostty/build.zig ]; then
     echo "Initializing ghostty submodule..."
@@ -17,16 +32,25 @@ fi
 
 # Build libghostty-vt
 echo "Building libghostty-vt..."
-(cd vendor/ghostty && zig build -Demit-lib-vt=true -Doptimize=ReleaseFast)
+if [ -n "$ZIG_TARGET" ]; then
+    # When cross-compiling, use an isolated cache so that find does not pick up
+    # host-architecture .a files from a shared or restored zig cache.
+    GHOSTTY_CACHE="$(pwd)/vendor/ghostty/.zig-cache-$ZIG_TARGET"
+    (cd vendor/ghostty && \
+     ZIG_LOCAL_CACHE_DIR="$GHOSTTY_CACHE" ZIG_GLOBAL_CACHE_DIR="$GHOSTTY_CACHE" \
+     zig build -Demit-lib-vt=true -Doptimize=ReleaseFast $ZIG_TARGET_FLAG)
+    SEARCH_DIRS="$GHOSTTY_CACHE"
+else
+    (cd vendor/ghostty && zig build -Demit-lib-vt=true -Doptimize=ReleaseFast)
+    SEARCH_DIRS="vendor/ghostty/.zig-cache"
+    [ -n "$ZIG_LOCAL_CACHE_DIR" ] && SEARCH_DIRS="$SEARCH_DIRS $ZIG_LOCAL_CACHE_DIR"
+    [ -n "$ZIG_GLOBAL_CACHE_DIR" ] && SEARCH_DIRS="$SEARCH_DIRS $ZIG_GLOBAL_CACHE_DIR"
+fi
 
 # Copy bundled C++ dependencies to stable paths.
 # These are built by ghostty's zig build into a cache directory with
-# hash-based names.  Search the local .zig-cache first, then fall back
-# to the global/local cache dirs (which CI tools like setup-zig may override).
+# hash-based names.
 echo "Copying dependency libraries..."
-SEARCH_DIRS="vendor/ghostty/.zig-cache"
-[ -n "$ZIG_LOCAL_CACHE_DIR" ] && SEARCH_DIRS="$SEARCH_DIRS $ZIG_LOCAL_CACHE_DIR"
-[ -n "$ZIG_GLOBAL_CACHE_DIR" ] && SEARCH_DIRS="$SEARCH_DIRS $ZIG_GLOBAL_CACHE_DIR"
 
 SIMDUTF=""
 HIGHWAY=""
@@ -52,7 +76,19 @@ echo "  libhighway.a <- $HIGHWAY"
 
 # Build ghostel module
 echo "Building ghostel module..."
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseFast $ZIG_TARGET_FLAG
 
-echo "Done! ghostel-module$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX") or ".so")' 2>/dev/null || echo '.dylib') is ready."
+# Determine output suffix from target or host OS
+if [ -n "$ZIG_TARGET" ]; then
+    case "$ZIG_TARGET" in
+        *macos*|*darwin*) MODULE_SUFFIX=".dylib" ;;
+        *)                MODULE_SUFFIX=".so" ;;
+    esac
+else
+    case "$(uname -s)" in
+        Darwin) MODULE_SUFFIX=".dylib" ;;
+        *)      MODULE_SUFFIX=".so" ;;
+    esac
+fi
+echo "Done! ghostel-module${MODULE_SUFFIX} is ready."
 echo "Load in Emacs with: (require 'ghostel)"

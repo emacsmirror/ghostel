@@ -29,10 +29,17 @@ process, keymap, and buffer.
 - Emacs 27.1+ with dynamic module support
 - macOS or Linux
 
-The native module is **automatically downloaded** on first use (pre-built
-binaries are available for macOS and Linux).  If you prefer to build from
-source, you'll also need [Zig](https://ziglang.org/) 0.14+ and the ghostty
-submodule (see [Building from source](#building-from-source)).
+The native module is **automatically downloaded** on first use.  Pre-built
+binaries are available for:
+
+- `aarch64-macos` (Apple Silicon)
+- `x86_64-macos` (Intel Mac)
+- `x86_64-linux`
+- `aarch64-linux`
+
+If you prefer to build from source or need a different platform, you'll also
+need [Zig](https://ziglang.org/) 0.14+ and the ghostty submodule (see
+[Building from source](#building-from-source)).
 
 ## Installation
 
