@@ -216,6 +216,13 @@ shell configuration files.  Supports bash, zsh, and fish."
 These keys pass through to Emacs instead."
   :type '(repeat string))
 
+(defcustom ghostel-scroll-on-input t
+  "Automatically scroll to the bottom when typing in the terminal.
+When non-nil, any character typed while the viewport is scrolled
+into the scrollback will first jump to the bottom of the terminal
+before sending the input."
+  :type 'boolean)
+
 ;;; ANSI color faces
 
 (defface ghostel-color-black
@@ -816,6 +823,9 @@ Returns the sequence string, or nil for unknown keys."
 (defun ghostel--self-insert ()
   "Send the last typed character to the terminal."
   (interactive)
+  (when (and ghostel-scroll-on-input ghostel--term)
+    (ghostel--scroll-bottom ghostel--term)
+    (setq ghostel--force-next-redraw t))
   (let* ((keys (this-command-keys))
          (char (aref keys (1- (length keys))))
          (str (if (and (characterp char) (< char 128))
@@ -829,6 +839,9 @@ Extracts the base key name and modifiers from `last-command-event'
 and routes through the ghostty key encoder, which respects terminal
 modes (application cursor keys, Kitty keyboard protocol, etc.)."
   (interactive)
+  (when (and ghostel-scroll-on-input ghostel--term)
+    (ghostel--scroll-bottom ghostel--term)
+    (setq ghostel--force-next-redraw t))
   (let* ((event last-command-event)
          (base (event-basic-type event))
          (mods (event-modifiers event))

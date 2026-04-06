@@ -1418,6 +1418,55 @@ cell, so the visual line width must equal the terminal column count."
         ;; send-key sets last-send-time via the fallback path
         (should ghostel--last-send-time)))))
 
+(ert-deftest ghostel-test-scroll-on-input-self-insert ()
+  "Self-insert scrolls to bottom when `ghostel-scroll-on-input' is non-nil."
+  (let ((ghostel--term 'fake)
+        (ghostel--force-next-redraw nil)
+        (ghostel-scroll-on-input t)
+        (scroll-bottom-called nil)
+        (sent-key nil))
+    (cl-letf (((symbol-function 'ghostel--scroll-bottom)
+               (lambda (_term) (setq scroll-bottom-called t)))
+              ((symbol-function 'ghostel--send-key)
+               (lambda (str) (setq sent-key str))))
+      (let ((last-command-event ?a))
+        (cl-letf (((symbol-function 'this-command-keys) (lambda () "a")))
+          (ghostel--self-insert)))
+      (should scroll-bottom-called)
+      (should ghostel--force-next-redraw)
+      (should (equal "a" sent-key)))))
+
+(ert-deftest ghostel-test-scroll-on-input-send-event ()
+  "Send-event scrolls to bottom when `ghostel-scroll-on-input' is non-nil."
+  (let ((ghostel--term 'fake)
+        (ghostel--force-next-redraw nil)
+        (ghostel-scroll-on-input t)
+        (scroll-bottom-called nil))
+    (cl-letf (((symbol-function 'ghostel--scroll-bottom)
+               (lambda (_term) (setq scroll-bottom-called t)))
+              ((symbol-function 'ghostel--send-encoded)
+               (lambda (_key _mods &optional _utf8) nil)))
+      (let ((last-command-event (aref (kbd "<return>") 0)))
+        (ghostel--send-event))
+      (should scroll-bottom-called)
+      (should ghostel--force-next-redraw))))
+
+(ert-deftest ghostel-test-scroll-on-input-disabled ()
+  "Self-insert does not scroll when `ghostel-scroll-on-input' is nil."
+  (let ((ghostel--term 'fake)
+        (ghostel--force-next-redraw nil)
+        (ghostel-scroll-on-input nil)
+        (scroll-bottom-called nil))
+    (cl-letf (((symbol-function 'ghostel--scroll-bottom)
+               (lambda (_term) (setq scroll-bottom-called t)))
+              ((symbol-function 'ghostel--send-key)
+               (lambda (_str) nil)))
+      (cl-letf (((symbol-function 'this-command-keys) (lambda () "a")))
+        (let ((last-command-event ?a))
+          (ghostel--self-insert)))
+      (should-not scroll-bottom-called)
+      (should-not ghostel--force-next-redraw))))
+
 (ert-deftest ghostel-test-control-key-bindings ()
   "All non-exception C-<letter> keys should be bound in ghostel-mode-map."
   (dolist (c (number-sequence ?a ?z))
@@ -1471,6 +1520,9 @@ cell, so the visual line width must equal the terminal column count."
     ghostel-test-input-flush-sends-buffered
     ghostel-test-send-encoded-sets-send-time
     ghostel-test-send-encoded-no-send-time-on-fallback
+    ghostel-test-scroll-on-input-self-insert
+    ghostel-test-scroll-on-input-send-event
+    ghostel-test-scroll-on-input-disabled
     ghostel-test-control-key-bindings
     ghostel-test-meta-key-bindings)
   "Tests that require only Elisp (no native module).")
