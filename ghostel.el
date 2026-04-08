@@ -80,6 +80,7 @@
 (require 'cl-lib)
 (require 'project)
 (require 'term)
+(require 'tramp)
 (require 'url-parse)
 (require 'face-remap)
 
@@ -94,6 +95,23 @@
 (defcustom ghostel-shell (or (getenv "SHELL") "/bin/sh")
   "Shell program to run in the terminal."
   :type 'string)
+
+(defcustom ghostel-tramp-shells
+  '(("ssh" login-shell)
+    ("scp" login-shell)
+    ("docker" "/bin/sh"))
+  "Shell to use for remote TRAMP connections, per method.
+Each entry is (TRAMP-METHOD SHELL [FALLBACK]).  TRAMP-METHOD is a
+method string such as \"ssh\" or \"docker\", or t as a catch-all default.
+
+SHELL is either a path string like \"/bin/bash\" or the symbol
+`login-shell' to auto-detect the remote user's login shell via
+`getent passwd'.  FALLBACK, when present, is used when login-shell
+detection fails."
+  :type '(alist :key-type (choice string (const t))
+                :value-type
+                (list (choice string (const login-shell))
+                      (choice (const :tag "No fallback" nil) string))))
 
 (defcustom ghostel-max-scrollback (* 20 1024 1024)  ; 20MB
   "Maximum scrollback size in bytes.
@@ -209,6 +227,17 @@ When non-nil, ghostel modifies the shell invocation to automatically
 load shell integration scripts without requiring changes to the user's
 shell configuration files.  Supports bash, zsh, and fish."
   :type 'boolean)
+
+(defcustom ghostel-tramp-shell-integration nil
+  "Inject shell integration for remote TRAMP sessions.
+When non-nil, ghostel writes integration scripts to a temporary
+file on the remote host and configures the shell to source them.
+Set to t for all supported shells, or a list of symbols
+\(e.g. \\='(bash zsh)) for specific shells only."
+  :type '(choice (const :tag "Disabled" nil)
+                 (const :tag "All shells" t)
+                 (repeat :tag "Specific shells"
+                         (choice (const bash) (const zsh) (const fish)))))
 
 (defcustom ghostel-keymap-exceptions
   '("C-c" "C-x" "C-u" "C-h" "C-g" "M-x" "M-o" "M-:" "C-\\")
@@ -602,6 +631,7 @@ variable re-enables automatic renaming for the next title update.")
 (defvar-local ghostel--prompt-positions nil
   "List of prompt positions as (buffer-line . exit-status) pairs.
 Used for prompt navigation and optional re-application after full redraws.")
+
 
 
 ;;; Keymap
@@ -1703,14 +1733,32 @@ VISIBLE is t or nil."
 
 (defun ghostel--update-directory (dir)
   "Update `default-directory' from terminal's OSC 7 report.
-DIR may be a file:// URL or a plain path."
+DIR may be a file:// URL or a plain path.  When the hostname in a
+file:// URL does not match the local machine, construct a TRAMP path."
   (when (and dir (not (equal dir ghostel--last-directory)))
     (setq ghostel--last-directory dir)
-    (let ((path (if (string-prefix-p "file://" dir)
-                    (url-filename (url-generic-parse-url dir))
-                  dir)))
-      (when (and path (file-directory-p path))
-        (setq default-directory (file-name-as-directory path))))))
+    (let (path)
+      (if (string-prefix-p "file://" dir)
+          (let* ((url (url-generic-parse-url dir))
+                 (host (url-host url))
+                 (filename (url-filename url)))
+            (if (ghostel--local-host-p host)
+                (setq path filename)
+              ;; Remote host — construct a TRAMP path.
+              ;; Reuse the full remote prefix from default-directory
+              ;; when available (preserves multi-hop, method, user).
+              (let ((prefix (file-remote-p default-directory)))
+                (setq path (if prefix
+                               (concat prefix filename)
+                             (format "/ssh:%s:%s" host filename))))))
+        (setq path dir))
+      (when (and path (not (string= path "")))
+        (if (file-remote-p path)
+            ;; Trust the shell's report; skip file-directory-p to avoid
+            ;; synchronous TRAMP connections on every cd.
+            (setq default-directory (file-name-as-directory path))
+          (when (file-directory-p path)
+            (setq default-directory (file-name-as-directory path))))))))
 
 
 ;;; Palette
@@ -1860,54 +1908,214 @@ PROCESS is the shell process, EVENT describes the state change."
      ((string-match-p "zsh" base) 'zsh)
      ((string-match-p "fish" base) 'fish))))
 
+(defun ghostel--local-host-p (host)
+  "Return non-nil if HOST refers to the local machine."
+  (or (null host)
+      (string= host "")
+      (eq t (compare-strings host nil nil "localhost" nil nil t))
+      (eq t (compare-strings host nil nil (system-name) nil nil t))
+      (eq t (compare-strings
+             host nil nil
+             (car (split-string (system-name) "\\.")) nil nil t))))
+
+(defun ghostel--tramp-get-shell (method)
+  "Get the shell for TRAMP METHOD from `ghostel-tramp-shells'.
+METHOD is a TRAMP method string or t for the default."
+  (let* ((specs (cdr (assoc method ghostel-tramp-shells)))
+         (first (car specs))
+         (second (cadr specs)))
+    (if (eq first 'login-shell)
+        (let* ((entry (ignore-errors
+                        (with-output-to-string
+                          (with-current-buffer standard-output
+                            (unless (= 0 (process-file-shell-command
+                                          "getent passwd $LOGNAME"
+                                          nil (current-buffer) nil))
+                              (error "Unexpected return value"))
+                            (when (> (count-lines (point-min) (point-max)) 1)
+                              (error "Unexpected output"))))))
+               (shell (when entry
+                        (nth 6 (split-string entry ":" nil "[ \t\n\r]+")))))
+          (or shell second))
+      first)))
+
+(defun ghostel--get-shell ()
+  "Get the shell to run, respecting TRAMP remote connections.
+When `default-directory' is a remote TRAMP path, consult
+`ghostel-tramp-shells' for the appropriate shell."
+  (if (file-remote-p default-directory)
+      (with-parsed-tramp-file-name default-directory nil
+        (or (ghostel--tramp-get-shell method)
+            (ghostel--tramp-get-shell t)
+            (with-connection-local-variables shell-file-name)
+            ghostel-shell))
+    ghostel-shell))
+
+(defun ghostel--read-local-file (path)
+  "Return the contents of local file PATH as a string."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (buffer-string)))
+
+(defun ghostel--write-remote-file (tramp-path content)
+  "Write CONTENT to TRAMP-PATH on the remote host."
+  (with-temp-buffer
+    (insert content)
+    (write-region (point-min) (point-max) tramp-path nil 'silent)))
+
+(defun ghostel--setup-remote-integration (shell-type)
+  "Set up shell integration on the remote host for SHELL-TYPE.
+Reads the local integration script, writes it (with any necessary
+preamble) to a temporary file on the remote host, and returns a
+plist (:env :args :stty :temp-files) for `ghostel--start-process'.
+Returns nil on failure."
+  (condition-case err
+      (let* ((remote-prefix (file-remote-p default-directory))
+             (ghostel-dir (file-name-directory
+                           (or (locate-library "ghostel")
+                               load-file-name buffer-file-name
+                               default-directory)))
+             (ext (symbol-name shell-type))
+             (integration (ghostel--read-local-file
+                           (expand-file-name
+                            (format "etc/ghostel.%s" ext) ghostel-dir))))
+        (pcase shell-type
+          ;; Bash: --rcfile replaces normal rc loading, so we source
+          ;; startup files explicitly before the integration.
+          ('bash
+           (let* ((temp (make-temp-file
+                         (concat remote-prefix "ghostel-") nil ".bash"))
+                  (path (file-remote-p temp 'localname)))
+             (ghostel--write-remote-file temp
+                                         (concat
+                                          "# Source standard startup files\n"
+                                          "if shopt -q login_shell 2>/dev/null; then\n"
+                                          "  [ -r /etc/profile ] && . /etc/profile\n"
+                                          "  for __gf in ~/.bash_profile ~/.bash_login ~/.profile; do\n"
+                                          "    [ -r \"$__gf\" ] && { . \"$__gf\"; break; }; done\n"
+                                          "  unset __gf\n"
+                                          "else\n"
+                                          "  for __gf in /etc/bash.bashrc /etc/bash/bashrc /etc/bashrc; do\n"
+                                          "    [ -r \"$__gf\" ] && { . \"$__gf\"; break; }; done\n"
+                                          "  unset __gf\n"
+                                          "  [ -r ~/.bashrc ] && . ~/.bashrc\n"
+                                          "fi\n"
+                                          integration))
+             (list :env nil :args (list "--rcfile" path)
+                   :stty "erase '^?' iutf8 echo" :temp-files (list temp))))
+          ;; Zsh: ZDOTDIR replaces .zshenv search, so we restore it,
+          ;; source the user's .zshenv, then load integration.
+          ('zsh
+           (let* ((temp-dir (make-temp-file
+                             (concat remote-prefix "ghostel-") t))
+                  (temp-zshenv (concat (file-name-as-directory temp-dir)
+                                       ".zshenv"))
+                  (remote-dir (file-remote-p temp-dir 'localname)))
+             (ghostel--write-remote-file temp-zshenv
+                                         (concat
+                                          "if [[ -n \"${GHOSTEL_ZSH_ZDOTDIR+X}\" ]]; then\n"
+                                          "    'builtin' 'export' ZDOTDIR=\"$GHOSTEL_ZSH_ZDOTDIR\"\n"
+                                          "    'builtin' 'unset' 'GHOSTEL_ZSH_ZDOTDIR'\n"
+                                          "else\n"
+                                          "    'builtin' 'unset' 'ZDOTDIR'\n"
+                                          "fi\n"
+                                          "{\n"
+                                          "    'builtin' 'typeset' _ghostel_file="
+                                          "\"${ZDOTDIR-$HOME}/.zshenv\"\n"
+                                          "    [[ ! -r \"$_ghostel_file\" ]] || "
+                                          "'builtin' 'source' '--' \"$_ghostel_file\"\n"
+                                          "} always {\n"
+                                          "    if [[ -o 'interactive' ]]; then\n"
+                                          integration "\n"
+                                          "    fi\n"
+                                          "    'builtin' 'unset' '_ghostel_file'\n"
+                                          "}\n"))
+             (list :env (list (format "ZDOTDIR=%s" remote-dir))
+                   :args nil :stty "erase '^?' iutf8"
+                   :temp-files (list temp-zshenv temp-dir))))
+          ;; Fish: -C runs after config, so just source the script.
+          ('fish
+           (let* ((temp (make-temp-file
+                         (concat remote-prefix "ghostel-") nil ".fish"))
+                  (path (file-remote-p temp 'localname)))
+             (ghostel--write-remote-file temp integration)
+             (list :env nil
+                   :args (list "-C" (format "source %s"
+                                            (shell-quote-argument path)))
+                   :stty "erase '^?' iutf8" :temp-files (list temp))))))
+    (error
+     (message "ghostel: remote shell integration failed: %s"
+              (error-message-string err))
+     nil)))
+
 (defun ghostel--start-process ()
-  "Start the shell process with a PTY."
+  "Start the shell process with a PTY.
+When `default-directory' is a remote TRAMP path, spawn the shell
+on the remote host."
   (let* ((height (max 1 (window-body-height)))
          (width (max 1 (window-max-chars-per-line)))
+         (remote-p (file-remote-p default-directory))
+         (shell (ghostel--get-shell))
          (ghostel-dir (file-name-directory
                        (or (locate-library "ghostel")
                            load-file-name buffer-file-name
                            default-directory)))
+         ;; Detect shell type when integration is enabled.
+         ;; For remote, also check ghostel-tramp-shell-integration.
          (shell-type (and ghostel-shell-integration
-                          (ghostel--detect-shell ghostel-shell)))
+                          (or (not remote-p)
+                              (let ((st (ghostel--detect-shell shell)))
+                                (and st
+                                     (or (eq ghostel-tramp-shell-integration t)
+                                         (and (listp ghostel-tramp-shell-integration)
+                                              (memq st ghostel-tramp-shell-integration)))
+                                     st)))
+                          (ghostel--detect-shell shell)))
+         ;; For remote sessions, set up integration via temp files.
+         (remote-integration
+          (when (and remote-p shell-type)
+            (ghostel--setup-remote-integration shell-type)))
          (integration-env
-          (pcase shell-type
-            ('bash
-             (let ((inject-script (expand-file-name
-                                   "etc/shell-integration/bash/ghostel-inject.bash"
-                                   ghostel-dir))
-                   (env (list "GHOSTEL_BASH_INJECT=1")))
-               (when (file-readable-p inject-script)
-                 (let ((old-env (getenv "ENV")))
-                   (when old-env
-                     (push (format "GHOSTEL_BASH_ENV=%s" old-env) env)))
-                 (push (format "ENV=%s" inject-script) env)
-                 (unless (getenv "HISTFILE")
-                   (push (format "HISTFILE=%s/.bash_history"
-                                 (expand-file-name "~"))
-                         env)
-                   (push "GHOSTEL_BASH_UNEXPORT_HISTFILE=1" env))
-                 env)))
-            ('zsh
-             (let ((zsh-dir (expand-file-name
-                             "etc/shell-integration/zsh" ghostel-dir)))
-               (when (file-directory-p zsh-dir)
-                 (let ((env nil)
-                       (old-zdotdir (getenv "ZDOTDIR")))
-                   (when old-zdotdir
-                     (push (format "GHOSTEL_ZSH_ZDOTDIR=%s" old-zdotdir) env))
-                   (push (format "ZDOTDIR=%s" zsh-dir) env)
-                   env))))
-            ('fish
-             (let ((integ-dir (expand-file-name
-                               "etc/shell-integration" ghostel-dir)))
-               (when (file-directory-p integ-dir)
-                 (let ((xdg (or (getenv "XDG_DATA_DIRS")
-                                "/usr/local/share:/usr/share")))
-                   (list
-                    (format "XDG_DATA_DIRS=%s:%s" integ-dir xdg)
-                    (format "GHOSTEL_SHELL_INTEGRATION_XDG_DIR=%s"
-                            integ-dir))))))))
+          (if remote-integration
+              (plist-get remote-integration :env)
+            (and (not remote-p)
+                 (pcase shell-type
+                   ('bash
+                    (let ((inject-script (expand-file-name
+                                          "etc/shell-integration/bash/ghostel-inject.bash"
+                                          ghostel-dir))
+                          (env (list "GHOSTEL_BASH_INJECT=1")))
+                      (when (file-readable-p inject-script)
+                        (let ((old-env (getenv "ENV")))
+                          (when old-env
+                            (push (format "GHOSTEL_BASH_ENV=%s" old-env) env)))
+                        (push (format "ENV=%s" inject-script) env)
+                        (unless (getenv "HISTFILE")
+                          (push (format "HISTFILE=%s/.bash_history"
+                                        (expand-file-name "~"))
+                                env)
+                          (push "GHOSTEL_BASH_UNEXPORT_HISTFILE=1" env))
+                        env)))
+                   ('zsh
+                    (let ((zsh-dir (expand-file-name
+                                    "etc/shell-integration/zsh" ghostel-dir)))
+                      (when (file-directory-p zsh-dir)
+                        (let ((env nil)
+                              (old-zdotdir (getenv "ZDOTDIR")))
+                          (when old-zdotdir
+                            (push (format "GHOSTEL_ZSH_ZDOTDIR=%s" old-zdotdir) env))
+                          (push (format "ZDOTDIR=%s" zsh-dir) env)
+                          env))))
+                   ('fish
+                    (let ((integ-dir (expand-file-name
+                                      "etc/shell-integration" ghostel-dir)))
+                      (when (file-directory-p integ-dir)
+                        (let ((xdg (or (getenv "XDG_DATA_DIRS")
+                                       "/usr/local/share:/usr/share")))
+                          (list
+                           (format "XDG_DATA_DIRS=%s:%s" integ-dir xdg)
+                           (format "GHOSTEL_SHELL_INTEGRATION_XDG_DIR=%s"
+                                   integ-dir))))))))))
          ;; Wrap the shell in /bin/sh -c so we can configure the PTY
          ;; before the shell reads its terminal attributes:
          ;;  - erase '^?': Emacs PTYs leave VERASE undefined, but
@@ -1920,17 +2128,24 @@ PROCESS is the shell process, EVENT describes the state change."
          ;;    active, the integration script handles echo.
          ;; The clear-screen hides the stty output.  exec replaces
          ;; the wrapper so only the shell process remains.
-         (shell-args (if (and (eq shell-type 'bash) integration-env)
-                         (list "--posix")
-                       nil))
-         (stty-flags (if (and (eq shell-type 'bash) (not integration-env))
-                         "erase '^?' iutf8 echo"
-                       "erase '^?' iutf8"))
+         (shell-args (cond
+                      (remote-integration
+                       (plist-get remote-integration :args))
+                      ((and (eq shell-type 'bash) integration-env)
+                       (list "--posix"))
+                      (t nil)))
+         (stty-flags (cond
+                      (remote-integration
+                       (plist-get remote-integration :stty))
+                      ((and (eq (ghostel--detect-shell shell) 'bash)
+                            (not integration-env))
+                       "erase '^?' iutf8 echo")
+                      (t "erase '^?' iutf8")))
          (shell-command
           (list "/bin/sh" "-c"
                 (concat "stty " stty-flags " 2>/dev/null; "
                         "printf '\\033[H\\033[2J'; exec "
-                        (shell-quote-argument ghostel-shell)
+                        (shell-quote-argument shell)
                         (and shell-args
                              (concat " "
                                      (mapconcat #'shell-quote-argument
@@ -1939,11 +2154,12 @@ PROCESS is the shell process, EVENT describes the state change."
           (append
            (list
             "INSIDE_EMACS=ghostel"
-            (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)
             "TERM=xterm-256color"
             "COLORTERM=truecolor"
             (format "COLUMNS=%d" width)
             (format "LINES=%d" height))
+           (unless remote-p
+             (list (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)))
            integration-env
            process-environment))
          (proc (make-process
@@ -1951,8 +2167,12 @@ PROCESS is the shell process, EVENT describes the state change."
                 :buffer (current-buffer)
                 :command shell-command
                 :connection-type 'pty
+                :file-handler remote-p
                 :filter #'ghostel--filter
                 :sentinel #'ghostel--sentinel)))
+    (when remote-integration
+      (dolist (f (plist-get remote-integration :temp-files))
+        (ignore-errors (delete-file f))))
     (setq ghostel--process proc)
     ;; Raw binary I/O — no encoding/decoding by Emacs
     (set-process-coding-system proc 'binary 'binary)

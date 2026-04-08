@@ -16,6 +16,7 @@ process, keymap, and buffer.
 - [Shell Integration](#shell-integration)
 - [Key Bindings](#key-bindings)
 - [Features](#features)
+  - [TRAMP (Remote Terminals)](#tramp-remote-terminals)
 - [Configuration](#configuration)
 - [Commands](#commands)
 - [Running Tests](#running-tests)
@@ -240,12 +241,80 @@ loaded scrollback.
 
 ### Shell Integration
 - Automatic injection for bash, zsh, and fish — no shell RC edits needed
-- **OSC 7** — directory tracking (`default-directory` follows the shell's cwd)
+- **OSC 7** — directory tracking (`default-directory` follows the shell's cwd, TRAMP-aware for remote hosts)
 - **OSC 133** — semantic prompt markers, enabling prompt-to-prompt navigation with `C-c C-n` / `C-c C-p`
 - **OSC 2** — title tracking (buffer is renamed from the terminal title)
 - **OSC 51** — call whitelisted Emacs functions from shell scripts (see [Calling Elisp from the Shell](#calling-elisp-from-the-shell))
 - **OSC 52** — clipboard support (opt-in, for remote sessions)
 - `INSIDE_EMACS` and `EMACS_GHOSTEL_PATH` environment variables
+
+### TRAMP (Remote Terminals)
+
+When `default-directory` is a TRAMP path (e.g. `/ssh:host:/home/user/`),
+`M-x ghostel` spawns a shell on the remote host via TRAMP's process
+machinery.  The `ghostel-tramp-shells` variable controls which shell to
+use per TRAMP method:
+
+```elisp
+;; Default configuration
+(setq ghostel-tramp-shells
+      '(("ssh" login-shell)          ; auto-detect via getent
+        ("scp" login-shell)
+        ("docker" "/bin/sh")))       ; fixed shell for containers
+```
+
+Each entry is `(METHOD SHELL [FALLBACK])`.  `SHELL` can be a path like
+`"/bin/bash"` or the symbol `login-shell` to auto-detect the remote user's
+login shell via `getent passwd`.  `FALLBACK` is used when detection fails.
+
+OSC 7 directory tracking is TRAMP-aware: when the shell reports a remote
+hostname, `default-directory` is set to the corresponding TRAMP path,
+reusing the existing TRAMP prefix (method, user, multi-hop) when available.
+
+#### Remote Shell Integration
+
+By default, shell integration scripts are not injected for remote
+sessions.  There are two ways to enable it:
+
+**Option 1: Automatic injection** (recommended for convenience)
+
+Set `ghostel-tramp-shell-integration` to `t` to have ghostel
+automatically transfer integration scripts to the remote host:
+
+```elisp
+(setq ghostel-tramp-shell-integration t)
+```
+
+This creates small temporary files on the remote host (cleaned up when
+the terminal exits).  You can also enable it for specific shells only:
+
+```elisp
+(setq ghostel-tramp-shell-integration '(bash zsh))
+```
+
+**Option 2: Manual setup** (recommended for permanent remote hosts)
+
+Copy the integration scripts from ghostel's `etc/` directory to each
+remote host (e.g. `~/.local/share/ghostel/`) and source them from
+your shell configuration:
+
+**bash** — add to `~/.bashrc` on the remote host:
+```bash
+[[ "$INSIDE_EMACS" = 'ghostel' ]] && source ~/.local/share/ghostel/ghostel.bash
+```
+
+**zsh** — add to `~/.zshrc` on the remote host:
+```zsh
+[[ "$INSIDE_EMACS" = 'ghostel' ]] && source ~/.local/share/ghostel/ghostel.zsh
+```
+
+**fish** — add to `~/.config/fish/config.fish` on the remote host:
+```fish
+test "$INSIDE_EMACS" = 'ghostel'; and source ~/.local/share/ghostel/ghostel.fish
+```
+
+The integration scripts provide directory tracking (OSC 7), prompt
+navigation (OSC 133), and `ghostel_cmd` for calling Elisp from the shell.
 
 ### Rendering
 - Incremental redraw — only dirty rows are re-rendered
@@ -317,9 +386,11 @@ individual faces with `M-x customize-face`.
 |----------------------------------|----------------------|----------------------------------------------------------|
 | `ghostel-module-auto-install`    | `ask`                | What to do when native module is missing (`ask`, `download`, `compile`, `nil`) |
 | `ghostel-shell`                  | `$SHELL`             | Shell program to run                                     |
+| `ghostel-tramp-shells`           | `(see below)`        | Shell to use per TRAMP method (with login-shell detection) |
 | `ghostel-shell-integration`      | `t`                  | Auto-inject shell integration                            |
+| `ghostel-tramp-shell-integration` | `nil`               | Auto-inject shell integration for remote TRAMP sessions  |
 | `ghostel-buffer-name`            | `"*ghostel*"`        | Default buffer name                                      |
-| `ghostel-max-scrollback`         | `10000`              | Maximum scrollback lines                                 |
+| `ghostel-max-scrollback`         | `20MB`               | Maximum scrollback size in bytes                         |
 | `ghostel-timer-delay`            | `0.033`              | Base redraw delay in seconds (~30fps)                    |
 | `ghostel-adaptive-fps`           | `t`                  | Adaptive frame rate (shorter delay after idle, stop timer when idle) |
 | `ghostel-immediate-redraw-threshold` | `256`            | Max output bytes to trigger immediate redraw (0 to disable) |
@@ -460,7 +531,7 @@ powering Neovim's built-in terminal.
 | Shell integration auto-inject | Yes       | No      |
 | Prompt navigation (OSC 133)   | Yes       | Yes     |
 | Elisp eval from shell         | Yes       | Yes     |
-| Tramp-aware directory         | No        | Yes     |
+| TRAMP remote terminals        | Yes       | Yes     |
 | OSC 52 clipboard              | Yes       | Yes     |
 | Copy mode                     | Yes       | Yes     |
 | Drag-and-drop                 | Yes       | No      |
@@ -490,9 +561,8 @@ defaults to ~30 fps redraw; vterm defaults to ~10 fps.
 
 **Shell integration.**  Ghostel auto-injects shell integration scripts for
 bash, zsh, and fish — no shell RC changes needed.  vterm requires manually
-sourcing scripts in your shell configuration.  vterm's shell integration is
-more featureful: it supports executing Elisp from the shell (`vterm_cmd`) and
-Tramp-aware remote directory tracking.
+sourcing scripts in your shell configuration.  Both support Elisp eval from
+the shell and TRAMP-aware remote directory tracking.
 
 **Performance.**  In PTY throughput benchmarks (1 MB streamed through `cat`),
 ghostel is roughly 2x faster than vterm on plain ASCII data (72 vs 33 MB/s).
