@@ -608,6 +608,11 @@ DIR is the module directory."
 (defvar-local ghostel--force-next-redraw nil
   "When non-nil, redraw regardless of synchronized output mode.")
 
+(defvar-local ghostel--has-wide-chars nil
+  "Set by the native renderer when wide characters are present.
+Cleared before each redraw; checked afterwards to decide whether
+pixel-based trailing-space compensation is needed.")
+
 (defvar-local ghostel--resize-timer nil
   "Timer for debounced SIGWINCH on alt screen.")
 
@@ -1548,41 +1553,39 @@ Skips regions that already have a `help-echo' property (e.g. from OSC 8)."
 
 
 (defun ghostel--compensate-wide-chars ()
-  "Hide trailing spaces on lines where wide-char glyphs cause pixel overflow.
+  "Shrink trailing spaces on lines where wide-char glyphs cause pixel overflow.
 Emoji glyphs often render wider than `char-width' times `frame-char-width'
 pixels, making the display engine treat the line as wider than the window
 even though `string-width' equals the terminal column count.  For each
-overflowing line, hide the minimal trailing spaces via `display' properties.
-Only called by the native renderer when wide characters are present."
-  (when (and (display-graphic-p)
-             (fboundp 'string-pixel-width))
-    (let ((char-w (frame-char-width))
-          (win-w (window-body-width nil t)))
-      (save-excursion
-        (goto-char (point-min))
-        (while (not (eobp))
-          (let* ((bol (line-beginning-position))
-                 (eol (line-end-position))
-                 (len (- eol bol)))
-            ;; Only measure pixel width when the line has wide characters.
-            ;; string-width > length means at least one char has char-width > 1.
-            (when (and (> len 0)
-                       (> (string-width (buffer-substring bol eol)) len))
-              (let* ((line (buffer-substring bol eol))
-                     (pw (string-pixel-width line))
-                     (overshoot (- pw win-w)))
-                (when (> overshoot 0)
-                  (let* ((spaces-start (save-excursion
-                                         (goto-char eol)
-                                         (skip-chars-backward " " bol)
-                                         (point)))
-                         (avail (- eol spaces-start))
-                         (hide (min (ceiling (/ (float overshoot) char-w))
-                                    avail)))
-                    (when (> hide 0)
-                      (put-text-property (- eol hide) eol
-                                         'display "")))))))
-          (forward-line 1))))))
+overflowing line we replace the trailing whitespace with a single stretch
+glyph of exactly the remaining pixel width."
+  (let ((win (get-buffer-window)))
+    (when (and win (display-graphic-p))
+      (let ((win-w (window-body-width win t))
+            (inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-min))
+          (while (not (eobp))
+            (let* ((bol (line-beginning-position))
+                   (eol (line-end-position))
+                   (spaces-start (save-excursion
+                                   (goto-char eol)
+                                   (skip-chars-backward " " bol)
+                                   (point)))
+                   (avail (- eol spaces-start)))
+              (when (> avail 0)
+                ;; Strip stale compensation so pixel measurement is accurate.
+                (remove-text-properties spaces-start eol '(display nil))
+                (let* ((content-pw (car (window-text-pixel-size win bol spaces-start)))
+                       (remaining (max 0 (- win-w content-pw)))
+                       (natural-pw (* avail (frame-char-width (window-frame win)))))
+                  ;; Only compensate when we would shrink the trailing spaces;
+                  ;; never widen them as that could introduce truncation on
+                  ;; lines that fit naturally.
+                  (when (< remaining natural-pw)
+                    (put-text-property spaces-start eol 'display
+                                       `(space :width (,remaining)))))))
+            (forward-line 1)))))))
 
 
 ;;; Prompt navigation (OSC 133)
@@ -2250,17 +2253,23 @@ frame after idle to improve interactive responsiveness."
         (unless (and (not ghostel--force-next-redraw)
                      (ghostel--mode-enabled ghostel--term 2026))
           (setq ghostel--force-next-redraw nil)
+          (setq ghostel--has-wide-chars nil)
           (let ((inhibit-read-only t)
                 (inhibit-redisplay t)
                 (inhibit-modification-hooks t))
-            (ghostel--redraw ghostel--term ghostel-full-redraw)))))))
+            (ghostel--redraw ghostel--term ghostel-full-redraw))
+          (when ghostel--has-wide-chars
+            (ghostel--compensate-wide-chars)))))))
 
 (defun ghostel-force-redraw ()
   "Force a full terminal redraw (for debugging)."
   (interactive)
   (when ghostel--term
+    (setq ghostel--has-wide-chars nil)
     (let ((inhibit-read-only t))
-      (ghostel--redraw ghostel--term ghostel-full-redraw))))
+      (ghostel--redraw ghostel--term ghostel-full-redraw))
+    (when ghostel--has-wide-chars
+      (ghostel--compensate-wide-chars))))
 
 
 ;;; Window resize

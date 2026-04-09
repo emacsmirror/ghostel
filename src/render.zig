@@ -856,7 +856,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full: bool) void {
     if (dirty != gt.DIRTY_FALSE) {
         _ = env.call0(emacs.sym.@"ghostel--detect-urls");
         if (has_wide_chars) {
-            _ = env.call0(emacs.sym.@"ghostel--compensate-wide-chars");
+            _ = env.call2(env.intern("set"), emacs.sym.@"ghostel--has-wide-chars", env.t());
         }
     }
 
