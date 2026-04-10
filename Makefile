@@ -3,9 +3,11 @@ EMACS ?= emacs
 XDG_CACHE_HOME ?= $(HOME)/.cache
 MELPAZOID_DIR  ?= $(XDG_CACHE_HOME)/melpazoid
 
-.PHONY: all build check test lint melpazoid byte-compile bench bench-quick clean
+ELC := ghostel.elc ghostel-debug.elc
 
-all: build test lint
+.PHONY: all build check test test-all lint melpazoid byte-compile bench bench-quick clean
+
+all: build test-all lint
 
 build:
 	./build.sh
@@ -13,8 +15,20 @@ build:
 check:
 	zig build check
 
-test:
+# Pattern rule: rebuild .elc whenever its .el source is newer.
+# Make's timestamp tracking keeps the byte-compiled files in sync, so
+# test targets never load stale .elc (Emacs prefers .elc over .el
+# even when the source is newer, which silently masks edits).
+%.elc: %.el
+	$(EMACS) --batch -Q -L . --eval "(setq byte-compile-error-on-warn t)" -f batch-byte-compile $<
+
+test: $(ELC)
 	$(EMACS) --batch -Q -L . -l ert -l test/ghostel-test.el -f ghostel-test-run-elisp
+
+test-all: build $(ELC)
+	$(EMACS) --batch -Q -L . -l ert -l test/ghostel-test.el -f ghostel-test-run
+
+byte-compile: $(ELC)
 
 lint: byte-compile package-lint checkdoc
 
@@ -50,9 +64,6 @@ melpazoid:
 		LOCAL_REPO=$(CURDIR) \
 		make -C "$(MELPAZOID_DIR)"
 
-byte-compile:
-	$(EMACS) --batch -Q -L . --eval "(setq byte-compile-error-on-warn t)" -f batch-byte-compile ghostel.el ghostel-debug.el
-
 bench:
 	bash bench/run-bench.sh
 
@@ -61,5 +72,5 @@ bench-quick:
 
 clean:
 	rm -f ghostel-module.dylib ghostel-module.so
-	rm -f ghostel.elc ghostel-debug.elc
+	rm -f $(ELC)
 	rm -rf zig-out .zig-cache
