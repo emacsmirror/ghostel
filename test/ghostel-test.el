@@ -2114,6 +2114,193 @@ rendered by `ghostel--delayed-redraw'.  This is the exact real-world path."
           (should (null result))
           (should-not set-size-called))))))
 
+;;; SIGWINCH delivery tests — verify the PTY actually sends the signal
+
+(defun ghostel-test--sigwinch-wait-for (proc pred timeout)
+  "Wait up to TIMEOUT seconds for PRED to become non-nil on PROC output."
+  (let ((deadline (+ (float-time) timeout)))
+    (while (and (not (funcall pred))
+                (< (float-time) deadline))
+      (accept-process-output proc 0.05))))
+
+(ert-deftest ghostel-test-sigwinch-reaches-shell-basic ()
+  "Verify `set-process-window-size' delivers SIGWINCH to a PTY shell.
+This is the baseline: if this fails, the Emacs PTY mechanism itself
+is broken on this system."
+  (skip-unless (not (eq system-type 'windows-nt)))
+  (skip-unless (file-executable-p "/bin/sh"))
+  (let* ((buf (generate-new-buffer " *sigwinch-basic*"))
+         (output "")
+         (proc nil))
+    (unwind-protect
+        (progn
+          (setq proc
+                (make-process
+                 :name "sigwinch-basic"
+                 :buffer buf
+                 :command '("/bin/sh")
+                 :connection-type 'pty
+                 :noquery t
+                 :coding 'binary
+                 :filter (lambda (_p s) (setq output (concat output s)))))
+          (set-process-window-size proc 24 80)
+          ;; Install a SIGWINCH trap that prints a marker to stdout.
+          (process-send-string
+           proc "trap 'printf \"__WINCH__\\n\"' WINCH\n")
+          ;; Wait a bit for shell to consume the trap command.
+          (sleep-for 0.3)
+          ;; Clear output so we only see post-resize output.
+          (setq output "")
+          ;; Now trigger a resize — this is what Emacs does after
+          ;; adjust-window-size-function returns a (width . height).
+          (set-process-window-size proc 30 120)
+          ;; Wait up to 2 seconds for trap to fire.
+          (ghostel-test--sigwinch-wait-for
+           proc (lambda () (string-match-p "__WINCH__" output)) 2.0)
+          (should (string-match-p "__WINCH__" output)))
+      (when (and proc (process-live-p proc))
+        (delete-process proc))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(ert-deftest ghostel-test-sigwinch-reaches-shell-ghostel-style ()
+  "Verify SIGWINCH delivery using ghostel's exact shell-invocation pattern.
+Ghostel starts the shell via `/bin/sh -c \"stty ...; exec <shell>\"',
+which could affect process group setup and SIGWINCH delivery."
+  (skip-unless (not (eq system-type 'windows-nt)))
+  (skip-unless (file-executable-p "/bin/sh"))
+  (let* ((buf (generate-new-buffer " *sigwinch-ghostel*"))
+         (output "")
+         (proc nil))
+    (unwind-protect
+        (progn
+          (setq proc
+                (make-process
+                 :name "sigwinch-ghostel"
+                 :buffer buf
+                 :command '("/bin/sh" "-c"
+                            "stty erase '^?' iutf8 2>/dev/null; \
+printf '\\033[H\\033[2J'; exec /bin/sh")
+                 :connection-type 'pty
+                 :noquery t
+                 :coding 'binary
+                 :filter (lambda (_p s) (setq output (concat output s)))))
+          (set-process-window-size proc 24 80)
+          ;; Wait for the exec to complete and shell to be ready.
+          (sleep-for 0.5)
+          (process-send-string
+           proc "trap 'printf \"__WINCH__\\n\"' WINCH\n")
+          (sleep-for 0.3)
+          (setq output "")
+          (set-process-window-size proc 30 120)
+          (ghostel-test--sigwinch-wait-for
+           proc (lambda () (string-match-p "__WINCH__" output)) 2.0)
+          (should (string-match-p "__WINCH__" output)))
+      (when (and proc (process-live-p proc))
+        (delete-process proc))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(ert-deftest ghostel-test-sigwinch-via-ghostel-resize-handler ()
+  "Verify SIGWINCH reaches child processes when resize goes through
+`ghostel--window-adjust-process-window-size'.  This is the full path
+Emacs takes: call the adjust-window-size-function, get (width . height),
+then call `set-process-window-size'."
+  (skip-unless (not (eq system-type 'windows-nt)))
+  (skip-unless (file-executable-p "/bin/sh"))
+  (let* ((buf (generate-new-buffer " *sigwinch-gh-handler*"))
+         (output "")
+         (proc nil))
+    (unwind-protect
+        (progn
+          (setq proc
+                (make-process
+                 :name "sigwinch-gh-handler"
+                 :buffer buf
+                 :command '("/bin/sh" "-c"
+                            "stty erase '^?' iutf8 2>/dev/null; \
+printf '\\033[H\\033[2J'; exec /bin/sh")
+                 :connection-type 'pty
+                 :noquery t
+                 :coding 'binary
+                 :filter (lambda (_p s) (setq output (concat output s)))))
+          (set-process-window-size proc 24 80)
+          (sleep-for 0.5)
+          (setq output "")
+          ;; Start a foreground child that traps SIGWINCH (simulates htop).
+          (process-send-string
+           proc "/bin/sh -c 'trap \"printf __CHILD_WINCH__\\\\n\" WINCH; \
+while :; do sleep 0.1; done'\n")
+          (sleep-for 0.5)
+          ;; Now simulate Emacs's window--adjust-process-windows path:
+          ;; register the adjust-window-size-function and trigger the handler.
+          (process-put proc 'adjust-window-size-function
+                       #'ghostel--window-adjust-process-window-size)
+          (with-current-buffer buf
+            (let ((ghostel--term 'fake-term))
+              (cl-letf (((symbol-function 'ghostel--set-size)
+                         (lambda (_t _h _w) nil))
+                        ((symbol-function 'ghostel--invalidate) #'ignore)
+                        ((default-value 'window-adjust-process-window-size-function)
+                         (lambda (_p _w) (cons 120 30))))
+                ;; Invoke the handler as Emacs would.
+                (let ((size (ghostel--window-adjust-process-window-size
+                             proc (list))))
+                  ;; Emacs calls set-process-window-size with the returned size.
+                  (should (equal size (cons 120 30)))
+                  (set-process-window-size proc (cdr size) (car size))))))
+          (ghostel-test--sigwinch-wait-for
+           proc (lambda () (string-match-p "__CHILD_WINCH__" output)) 2.0)
+          (should (string-match-p "__CHILD_WINCH__" output)))
+      (when (and proc (process-live-p proc))
+        (delete-process proc))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(ert-deftest ghostel-test-sigwinch-reaches-child-process ()
+  "Verify SIGWINCH reaches a foreground child of the shell (mimicking htop).
+When htop runs, it is a child process of the shell.  Since ghostel's
+shell is non-interactive (no job control), the child inherits the
+shell's process group and should receive SIGWINCH sent to the PTY's
+foreground process group."
+  (skip-unless (not (eq system-type 'windows-nt)))
+  (skip-unless (file-executable-p "/bin/sh"))
+  (let* ((buf (generate-new-buffer " *sigwinch-child*"))
+         (output "")
+         (proc nil))
+    (unwind-protect
+        (progn
+          (setq proc
+                (make-process
+                 :name "sigwinch-child"
+                 :buffer buf
+                 :command '("/bin/sh" "-c" "exec /bin/sh")
+                 :connection-type 'pty
+                 :noquery t
+                 :coding 'binary
+                 :filter (lambda (_p s) (setq output (concat output s)))))
+          (set-process-window-size proc 24 80)
+          (sleep-for 0.3)
+          (setq output "")
+          ;; Start a child sh in the foreground with its own SIGWINCH trap,
+          ;; sleeping forever.  This child simulates htop waiting for SIGWINCH.
+          ;; We can't send more commands after this because the outer shell
+          ;; is blocked on wait() for the child — but that's fine, we only
+          ;; need the resize to fire and the child's trap to print the marker.
+          (process-send-string
+           proc "/bin/sh -c 'trap \"printf __CHILD_WINCH__\\\\n\" WINCH; \
+while :; do sleep 0.1; done'\n")
+          (sleep-for 0.5)
+          (set-process-window-size proc 30 120)
+          (ghostel-test--sigwinch-wait-for
+           proc (lambda () (string-match-p "__CHILD_WINCH__" output)) 2.0)
+          (should (string-match-p "__CHILD_WINCH__" output)))
+      (when (and proc (process-live-p proc))
+        (delete-process proc))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
@@ -2164,7 +2351,11 @@ rendered by `ghostel--delayed-redraw'.  This is the exact real-world path."
     ghostel-test-update-directory-remote
     ghostel-test-get-shell-local
     ghostel-test-resize-window-adjust
-    ghostel-test-resize-nil-size)
+    ghostel-test-resize-nil-size
+    ghostel-test-sigwinch-reaches-shell-basic
+    ghostel-test-sigwinch-reaches-shell-ghostel-style
+    ghostel-test-sigwinch-reaches-child-process
+    ghostel-test-sigwinch-via-ghostel-resize-handler)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()
