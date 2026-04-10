@@ -2181,12 +2181,20 @@ ncurses apps like htop at start-up size and breaks live resize."
                 (< (float-time) deadline))
       (accept-process-output proc 0.05))))
 
+(defconst ghostel-test--bash
+  (cond ((file-executable-p "/bin/bash") "/bin/bash")
+        ((file-executable-p "/usr/bin/bash") "/usr/bin/bash"))
+  "Absolute path to bash, or nil if not found.
+The baseline SIGWINCH tests explicitly use bash because trap-on-signal
+behavior for an idle shell reading stdin differs across implementations
+\(bash delivers immediately; dash defers until the next input line\).")
+
 (ert-deftest ghostel-test-sigwinch-reaches-shell-basic ()
   "Verify `set-process-window-size' delivers SIGWINCH to a PTY shell.
 This is the baseline: if this fails, the Emacs PTY mechanism itself
 is broken on this system."
   (skip-unless (not (eq system-type 'windows-nt)))
-  (skip-unless (file-executable-p "/bin/sh"))
+  (skip-unless ghostel-test--bash)
   (let* ((buf (generate-new-buffer " *sigwinch-basic*"))
          (output "")
          (proc nil))
@@ -2196,7 +2204,7 @@ is broken on this system."
                 (make-process
                  :name "sigwinch-basic"
                  :buffer buf
-                 :command '("/bin/sh")
+                 :command (list ghostel-test--bash)
                  :connection-type 'pty
                  :noquery t
                  :coding 'binary
@@ -2226,7 +2234,7 @@ is broken on this system."
 Ghostel starts the shell via `/bin/sh -c \"stty ...; exec <shell>\"',
 which could affect process group setup and SIGWINCH delivery."
   (skip-unless (not (eq system-type 'windows-nt)))
-  (skip-unless (file-executable-p "/bin/sh"))
+  (skip-unless ghostel-test--bash)
   (let* ((buf (generate-new-buffer " *sigwinch-ghostel*"))
          (output "")
          (proc nil))
@@ -2236,9 +2244,10 @@ which could affect process group setup and SIGWINCH delivery."
                 (make-process
                  :name "sigwinch-ghostel"
                  :buffer buf
-                 :command '("/bin/sh" "-c"
-                            "stty erase '^?' iutf8 2>/dev/null; \
-printf '\\033[H\\033[2J'; exec /bin/sh")
+                 :command (list "/bin/sh" "-c"
+                                (format "stty erase '^?' iutf8 2>/dev/null; \
+printf '\\033[H\\033[2J'; exec %s"
+                                        ghostel-test--bash))
                  :connection-type 'pty
                  :noquery t
                  :coding 'binary
