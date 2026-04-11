@@ -41,7 +41,7 @@ if [ -n "$ZIG_TARGET" ]; then
      zig build -Demit-lib-vt=true -Doptimize=ReleaseFast $ZIG_TARGET_FLAG)
     SEARCH_DIRS="$GHOSTTY_CACHE"
 else
-    (cd vendor/ghostty && zig build -Demit-lib-vt=true -Doptimize=ReleaseFast)
+    (cd vendor/ghostty && zig build -Demit-lib-vt=true -Doptimize=ReleaseFast -Dcpu=baseline)
     SEARCH_DIRS="vendor/ghostty/.zig-cache"
     [ -n "$ZIG_LOCAL_CACHE_DIR" ] && SEARCH_DIRS="$SEARCH_DIRS $ZIG_LOCAL_CACHE_DIR"
     [ -n "$ZIG_GLOBAL_CACHE_DIR" ] && SEARCH_DIRS="$SEARCH_DIRS $ZIG_GLOBAL_CACHE_DIR"
@@ -76,7 +76,11 @@ echo "  libhighway.a <- $HIGHWAY"
 
 # Build ghostel module
 echo "Building ghostel module..."
-zig build -Doptimize=ReleaseFast $ZIG_TARGET_FLAG
+if [ -n "$ZIG_TARGET" ]; then
+    zig build -Doptimize=ReleaseFast $ZIG_TARGET_FLAG
+else
+    zig build -Doptimize=ReleaseFast -Dcpu=baseline
+fi
 
 # Determine output suffix from target or host OS
 if [ -n "$ZIG_TARGET" ]; then
