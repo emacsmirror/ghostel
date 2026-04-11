@@ -196,9 +196,42 @@ This is the vterm-style growing-buffer model that lets `isearch' and
               (should (string-match-p "row-05" content))
               ;; The most recent row is on the active screen.
               (should (string-match-p "row-11" content)))
-            ;; Buffer line count = scrollback rows + viewport rows.
-            ;; 12 written lines + 1 cursor row = 13 rows total
-            (should (= 13 (count-lines (point-min) (point-max))))))
+            ;; 12 distinct rows made it into the buffer.  The trailing
+            ;; empty cursor row is trimmed to nothing by the renderer
+            ;; and therefore contributes no additional line.
+            (should (= 12 (count-lines (point-min) (point-max))))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-render-trims-trailing-whitespace ()
+  "Rendered rows do not carry libghostty's full-width padding.
+The renderer should only keep cells the terminal actually wrote to,
+so a short line in a 40-column terminal shows up as the written
+content plus no trailing space padding.  Shell-written spaces
+\(e.g. the trailing space in a \\='$ \\=' prompt or `%-80s' layout)
+are retained — only unwritten padding cells are trimmed."
+  (let ((buf (generate-new-buffer " *ghostel-test-trim-ws*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 3 40 100))
+                 (inhibit-read-only t))
+            ;; Write `hi` at the top-left and redraw.
+            (ghostel--write-input term "\e[H\e[2Jhi")
+            (ghostel--redraw term t)
+            (let ((lines (split-string (buffer-substring-no-properties
+                                        (point-min) (point-max))
+                                       "\n")))
+              ;; First row is trimmed to "hi" (no trailing spaces).
+              (should (equal "hi" (car lines)))
+              ;; Remaining rows are empty (not rows of 40 spaces).
+              (dolist (row (cdr lines))
+                (should (string-empty-p row))))
+            ;; Shell-written trailing space is preserved.
+            (ghostel--write-input term "\e[H\e[2J$ ")
+            (ghostel--redraw term t)
+            (let ((lines (split-string (buffer-substring-no-properties
+                                        (point-min) (point-max))
+                                       "\n")))
+              (should (equal "$ " (car lines))))))
       (kill-buffer buf))))
 
 (ert-deftest ghostel-test-scrollback-preserves-url-properties ()
@@ -458,7 +491,9 @@ scrolling libghostty's viewport."
 (ert-deftest ghostel-test-wide-char-no-overflow ()
   "Test that wide characters (emoji) don't make rendered lines overflow.
 A 2-cell-wide emoji should not produce an extra space for the spacer
-cell, so the visual line width must equal the terminal column count."
+cell, so the visual line width must equal the emoji width (2).  The
+renderer trims trailing blank cells, so we compare against 2 rather
+than the full terminal `cols'."
   (let ((buf (generate-new-buffer " *ghostel-test-wide*"))
         (cols 40))
     (unwind-protect
@@ -468,12 +503,15 @@ cell, so the visual line width must equal the terminal column count."
             ;; Feed a wide emoji — occupies 2 terminal cells
             (ghostel--write-input term "🟢")
             (ghostel--redraw term t)
-            ;; First rendered line should have visual width == cols
+            ;; First rendered line should have visual width 2 (the
+            ;; emoji) and no trailing padding from the spacer cell.
             (goto-char (point-min))
             (let* ((line (buffer-substring (line-beginning-position)
                                            (line-end-position)))
                    (width (string-width line)))
-              (should (equal cols width)))))
+              (should (equal 2 width))
+              ;; And the line must NOT exceed the terminal width.
+              (should (<= width cols)))))
       (kill-buffer buf))))
 
 ;; -----------------------------------------------------------------------
@@ -1009,7 +1047,9 @@ the reply waits for the redraw timer."
               (should (string-match-p "line-B" content))       ; row1 preserved
               (should (string-match-p "line-C updated" content))) ; row2 updated
 
-            (should (equal 5 (count-lines (point-min) (point-max)))))) ; line count
+            ;; 3 content rows + 2 trailing blank rows trimmed to
+            ;; empty strings = 4 newlines = 4 lines counted.
+            (should (equal 4 (count-lines (point-min) (point-max))))))
       (kill-buffer buf))))
 
 ;; -----------------------------------------------------------------------
@@ -1414,7 +1454,11 @@ app redraws all rows at new width via the filter pipeline."
                   (ghostel--redraw ghostel--term t)
                   (let ((c (buffer-substring-no-properties (point-min) (point-max))))
                     (should (string-match-p "WIDE-R00" c))
-                    ;; Verify rows are 80 chars wide.
+                    ;; Row 1 is at most `cols' chars wide after the
+                    ;; renderer trims unwritten padding.  The shell
+                    ;; here left-pads with spaces up to 80 cols via
+                    ;; `%-80s', which libghostty records as written
+                    ;; space cells, so row 1 stays exactly 80 chars.
                     (should (= 80 (length (car (split-string c "\n"))))))
 
                   ;; Simulate what the resize function does.
@@ -1437,8 +1481,11 @@ app redraws all rows at new width via the filter pipeline."
                     (should (string-match-p "NARROW-R05" content))
                     ;; No old wide content.
                     (should-not (string-match-p "WIDE-R" content))
-                    ;; Rows should be 40 chars wide (new terminal width).
-                    (should (= 40 (length (car (split-string content "\n")))))))
+                    ;; Each row is at most 40 chars (the new terminal
+                    ;; width) — the app wrote 10 chars then stopped,
+                    ;; so the renderer trims at the content end.
+                    (dolist (row (split-string content "\n"))
+                      (should (<= (length row) 40)))))
               (when (process-live-p proc)
                 (delete-process proc)))))
       (kill-buffer buf))))

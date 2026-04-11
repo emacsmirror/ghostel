@@ -459,6 +459,14 @@ const RowContent = struct {
 
 /// Build text content and style runs for the current row in the iterator.
 /// Style runs use character (codepoint) offsets for Emacs put-text-property.
+///
+/// Trailing blank cells — spaces with the default cell style — are
+/// trimmed off the end of the row so the Emacs buffer does not carry
+/// libghostty's full-width viewport padding. A cell is NOT blank if
+/// its character is non-space, or if its style has any non-default
+/// attribute (e.g. a colored background, underline, etc.), so visibly-
+/// styled blanks are preserved. Style runs extending past the trim
+/// point are clipped to the new length by `insertAndStyle'.
 fn buildRowContent(
     term: *Terminal,
     text_buf: []u8,
@@ -467,6 +475,11 @@ fn buildRowContent(
 ) RowContent {
     var text_len: usize = 0; // byte offset
     var char_len: usize = 0; // character (codepoint) offset
+    // Position at the end of the last non-blank cell; final row length
+    // is trimmed back to this. Any run of blank cells past the end is
+    // discarded along with their default-style trailing padding.
+    var trim_text_len: usize = 0;
+    var trim_char_len: usize = 0;
     var prompt_char_len: usize = 0; // chars that are semantic prompt
     var in_prompt: bool = true; // track contiguous leading prompt cells
     var has_wide: bool = false;
@@ -531,6 +544,12 @@ fn buildRowContent(
                 char_len += 1;
             }
             if (in_prompt) prompt_char_len = char_len;
+            // Empty cells are blank for trim purposes unless their
+            // style has a visible attribute (e.g. colored background).
+            if (!cell_style.isDefault()) {
+                trim_text_len = text_len;
+                trim_char_len = char_len;
+            }
             continue;
         }
 
@@ -549,7 +568,23 @@ fn buildRowContent(
             char_len += 1; // one codepoint = one Emacs character
         }
         if (in_prompt) prompt_char_len = char_len;
+        // Any cell that libghostty stored a grapheme for was written
+        // explicitly by the terminal, so it anchors the trim point —
+        // even if the grapheme happens to be a space (e.g. the space
+        // in a \"$ \" prompt, or a space the shell intentionally
+        // emitted as part of a layout). Only unwritten padding cells
+        // (the `graphemes_len == 0' branch above) are considered blank.
+        trim_text_len = text_len;
+        trim_char_len = char_len;
     }
+
+    // Trim trailing blank cells. Cap `prompt_char_len' at the new
+    // `char_len' so the "leading prompt" region never extends past the
+    // trimmed text. Style runs extending past the trim point are
+    // clipped by `insertAndStyle' via its `content.char_len' cap.
+    text_len = trim_text_len;
+    char_len = trim_char_len;
+    if (prompt_char_len > char_len) prompt_char_len = char_len;
 
     // Close final run
     if (char_len > run_start_char and run_count.* < runs.len) {
