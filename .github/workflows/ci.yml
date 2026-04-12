@@ -68,12 +68,12 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/emacs-evil/evil.git /tmp/evil
 
-      - name: Run ghostel-evil tests
+      - name: Run evil-ghostel tests
         run: |
           emacs --batch -Q -L /tmp/evil -L . \
             -l ert \
-            -l test/ghostel-evil-test.el \
-            -f ghostel-evil-test-run-elisp
+            -l test/evil-ghostel-test.el \
+            -f evil-ghostel-test-run-elisp
 
   build-native:
     strategy:

@@ -403,7 +403,7 @@ individual faces with `M-x customize-face`.
 
 ## Evil-mode
 
-Ghostel includes optional `evil-mode` support via `ghostel-evil.el`.
+Ghostel includes optional `evil-mode` support via `evil-ghostel.el`.
 It synchronizes the terminal cursor with Emacs point during evil state
 transitions so that normal-mode navigation (`hjkl` etc.) works
 correctly.
@@ -411,12 +411,12 @@ correctly.
 To enable:
 
 ```elisp
-(use-package ghostel-evil
+(use-package evil-ghostel
   :after (ghostel evil)
-  :hook (ghostel-mode . ghostel-evil-mode))
+  :hook (ghostel-mode . evil-ghostel-mode))
 ```
 
-When `ghostel-evil-mode` is active:
+When `evil-ghostel-mode` is active:
 
 - Ghostel starts in **insert state** (terminal input works normally)
 - Pressing **ESC** enters normal state and snaps point to the terminal cursor

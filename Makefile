@@ -34,7 +34,7 @@ test-evil:
 		git clone --depth 1 https://github.com/emacs-evil/evil.git "$(EVIL_DIR)"; \
 	fi
 	$(EMACS) --batch -Q -L "$(EVIL_DIR)" -L . \
-		-l ert -l test/ghostel-evil-test.el -f ghostel-evil-test-run
+		-l ert -l test/evil-ghostel-test.el -f evil-ghostel-test-run
 
 byte-compile: $(ELC)
 

@@ -46,7 +46,7 @@ jobs:
       - name: Run
         env:
           LOCAL_REPO: ${{ github.workspace }}
-          RECIPE: (ghostel-evil :fetcher github :repo "dakra/ghostel" :files ("ghostel-evil.el"))
+          RECIPE: (evil-ghostel :fetcher github :repo "dakra/ghostel" :files ("evil-ghostel.el"))
           EXIST_OK: false
           WARN_IS_ERROR: true
         run: make -C ~/melpazoid
