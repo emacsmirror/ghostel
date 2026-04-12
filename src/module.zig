@@ -13,7 +13,7 @@ const input = @import("input.zig");
 const c = emacs.c;
 
 /// Module version — keep in sync with ghostel.el and build.zig.zon.
-const version = "0.11.0";
+const version = "0.12.0";
 
 // ---------------------------------------------------------------------------
 // Module entry point
