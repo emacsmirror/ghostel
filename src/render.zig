@@ -996,6 +996,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
             // Ran off the end — buffer is out of sync; rebuild from scratch.
             env.eraseBuffer();
             term.scrollback_in_buffer = 0;
+            force_full = true;
         }
         env.gotoCharN(1);
         if (term.scrollback_in_buffer > 0) {
@@ -1006,6 +1007,9 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
 
     // Check dirty state — cells are only redrawn when dirty, but cursor
     // positioning always runs so that cursor-only movements are visible.
+    // force_full overrides: the buffer may have been erased by scrollback
+    // sync / resize / rotation above, so we must rebuild even if
+    // libghostty considers the cells clean.
     var dirty: c_int = gt.DIRTY_FALSE;
     _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_DIRTY, @ptrCast(&dirty));
     var has_hyperlinks: bool = false;
@@ -1013,7 +1017,7 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
     var hyperlink_row_count: usize = 0;
     var has_wide_chars: bool = false;
 
-    if (dirty != gt.DIRTY_FALSE) {
+    if (dirty != gt.DIRTY_FALSE or force_full) {
         // Set buffer default face
         var fg_hex: [7]u8 = undefined;
         var bg_hex: [7]u8 = undefined;
