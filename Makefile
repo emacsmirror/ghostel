@@ -11,7 +11,7 @@ ELC := ghostel.elc ghostel-debug.elc
 all: build test-all test-evil lint
 
 build:
-	./build.sh
+	zig build
 
 check:
 	zig build check
