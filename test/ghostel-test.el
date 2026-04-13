@@ -205,6 +205,43 @@ This is the vterm-style growing-buffer model that lets `isearch' and
             (should (= 12 (count-lines (point-min) (point-max))))))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-scrollback-bootstrap-not-blank ()
+  "First-time scrollback materialization must contain actual content.
+Regression test: when the initial (mostly empty) viewport was rendered
+and then a burst of output overflowed the screen, the promotion
+optimisation incorrectly kept the stale empty rows as scrollback
+instead of fetching the real content from libghostty."
+  (let ((buf (generate-new-buffer " *ghostel-test-sb-bootstrap*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            ;; Render the initial (nearly empty) viewport so the buffer
+            ;; has 5 rows of stale content — simulates a fresh terminal.
+            (ghostel--write-input term "$ \r\n")
+            (ghostel--redraw term t)
+            ;; Now a burst of output overflows the viewport.
+            (dotimes (i 15)
+              (ghostel--write-input term (format "line-%02d\r\n" i)))
+            (ghostel--redraw term t)
+            ;; The scrollback region (above the viewport) must contain
+            ;; the actual output, not blank lines from the old viewport.
+            (let ((content (buffer-substring-no-properties (point-min) (point-max))))
+              (should (string-match-p "\\$ " content))   ; prompt survived
+              (should (string-match-p "line-00" content)) ; first output line
+              (should (string-match-p "line-05" content)) ; middle output line
+              ;; No blank lines in the scrollback region: every line
+              ;; before the viewport should have visible content.
+              (goto-char (point-min))
+              (let ((blank-count 0))
+                (while (and (not (eobp))
+                            (< (line-number-at-pos) (- (line-number-at-pos (point-max)) 4)))
+                  (when (looking-at-p "^$")
+                    (setq blank-count (1+ blank-count)))
+                  (forward-line 1))
+                (should (= 0 blank-count))))))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-render-trims-trailing-whitespace ()
   "Rendered rows do not carry libghostty's full-width padding.
 The renderer should only keep cells the terminal actually wrote to,

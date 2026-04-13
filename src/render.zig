@@ -941,33 +941,46 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
         //    `insertScrollbackRange` for the remainder.
         var delta = libghostty_sb - term.scrollback_in_buffer;
 
-        env.gotoCharN(viewport_start_int);
-        const remaining_lines = env.forwardLine(@as(i64, @intCast(delta)));
-        var promoted: usize = delta - @as(usize, @intCast(remaining_lines));
-
-        // forward-line counts the position right after the last buffer
-        // char as a moveable "line N+1" even when the buffer doesn't
-        // end in \n. That position corresponds to our terminal cursor
-        // row — a stale snapshot, NOT a real libghostty scrollback row.
-        // If we landed at pointMax with no trailing newline, peel one
-        // off the promoted count so we don't promote the cursor row.
-        if (promoted > 0 and env.extractInteger(env.point()) == env.extractInteger(env.pointMax())) {
-            const cb = env.call0(emacs.sym.@"char-before");
-            if (env.isNotNil(cb) and env.extractInteger(cb) != '\n') {
-                promoted -= 1;
-            }
-        }
-
-        if (promoted > 0) {
-            term.scrollback_in_buffer += promoted;
-            // forward-line may have left point at pointMax even when it
-            // partially walked past complete lines, so always re-walk
-            // exactly `promoted` newline-bounded lines to anchor the new
-            // viewport_start at the start of the first un-promoted row.
+        // Skip promotion when the entire previous viewport scrolled off
+        // during first materialization.  The buffer still contains the
+        // initial viewport (often mostly empty rows from before any
+        // output) which was overwritten at the cursor before scrolling
+        // off — promoted rows would be stale.  When delta < rows only
+        // the topmost rows scrolled off; those sat above the cursor and
+        // were not overwritten, so promotion is safe even on the first
+        // burst.  The stale old viewport tail gets cleaned up by the
+        // deleteRegion(viewport_start, pointMax) in the viewport
+        // renderer below.
+        var promoted: usize = 0;
+        if (term.scrollback_in_buffer > 0 or delta < term.rows) {
             env.gotoCharN(viewport_start_int);
-            _ = env.forwardLine(@as(i64, @intCast(promoted)));
-            viewport_start_int = env.extractInteger(env.point());
-            delta -= promoted;
+            const remaining_lines = env.forwardLine(@as(i64, @intCast(delta)));
+            promoted = delta - @as(usize, @intCast(remaining_lines));
+
+            // forward-line counts the position right after the last buffer
+            // char as a moveable "line N+1" even when the buffer doesn't
+            // end in \n. That position corresponds to our terminal cursor
+            // row — a stale snapshot, NOT a real libghostty scrollback row.
+            // If we landed at pointMax with no trailing newline, peel one
+            // off the promoted count so we don't promote the cursor row.
+            if (promoted > 0 and env.extractInteger(env.point()) == env.extractInteger(env.pointMax())) {
+                const cb = env.call0(emacs.sym.@"char-before");
+                if (env.isNotNil(cb) and env.extractInteger(cb) != '\n') {
+                    promoted -= 1;
+                }
+            }
+
+            if (promoted > 0) {
+                term.scrollback_in_buffer += promoted;
+                // forward-line may have left point at pointMax even when it
+                // partially walked past complete lines, so always re-walk
+                // exactly `promoted` newline-bounded lines to anchor the new
+                // viewport_start at the start of the first un-promoted row.
+                env.gotoCharN(viewport_start_int);
+                _ = env.forwardLine(@as(i64, @intCast(promoted)));
+                viewport_start_int = env.extractInteger(env.point());
+                delta -= promoted;
+            }
         }
 
         if (delta > 0) {
