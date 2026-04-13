@@ -97,15 +97,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          persist-credentials: true
-
-      - name: Rewrite SSH to HTTPS for submodules
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule sync --recursive
-          git submodule update --init --recursive
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2

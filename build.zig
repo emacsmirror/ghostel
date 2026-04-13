@@ -12,10 +12,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .@"emit-lib-vt" = true,
-    }) orelse std.debug.panic(
-        "ghostty dependency unavailable; initialize the vendor/ghostty submodule",
-        .{},
-    );
+    }) orelse @panic("ghostty dependency unavailable; run: zig build --fetch");
+
+    const ghostty_lib = ghostty_dep.artifact("ghostty-vt-static");
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/module.zig"),
@@ -25,8 +24,8 @@ pub fn build(b: *std.Build) void {
         .strip = if (is_release) true else null,
         .omit_frame_pointer = if (is_release) true else null,
     });
-    addModuleIncludes(b, mod, emacs_module_dir);
-    mod.linkLibrary(ghostty_dep.artifact("ghostty-vt-static"));
+    addModuleIncludes(mod, emacs_module_dir, ghostty_lib);
+    mod.linkLibrary(ghostty_lib);
 
     const lib = b.addLibrary(.{
         .name = "ghostel-module",
@@ -58,7 +57,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    addModuleIncludes(b, check_mod, emacs_module_dir);
+    addModuleIncludes(check_mod, emacs_module_dir, ghostty_lib);
 
     const check_obj = b.addObject(.{
         .name = "ghostel-module-check",
@@ -70,12 +69,12 @@ pub fn build(b: *std.Build) void {
 }
 
 fn addModuleIncludes(
-    b: *std.Build,
     mod: *std.Build.Module,
     emacs_module_dir: std.Build.LazyPath,
+    ghostty_lib: *std.Build.Step.Compile,
 ) void {
     mod.addSystemIncludePath(emacs_module_dir);
-    mod.addIncludePath(b.path("vendor/ghostty/include"));
+    mod.addIncludePath(ghostty_lib.getEmittedIncludeTree());
 }
 
 fn resolveEmacsModuleDir(b: *std.Build) std.Build.LazyPath {

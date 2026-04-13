@@ -94,48 +94,31 @@ require local Emacs headers.  If you want to override the vendored header, set
 `../include` and `../share/emacs/include`.
 
 ```sh
-# Clone with submodule
-git clone --recurse-submodules https://github.com/dakra/ghostel.git
+git clone https://github.com/dakra/ghostel.git
 cd ghostel
 
-# Optional: override the vendored header
-# export EMACS_INCLUDE_DIR=/path/to/include
-# export EMACS_BIN_DIR=/path/to/emacs/bin
-
-# Build everything (libghostty-vt + ghostel module)
+# Build everything (fetches ghostty automatically via Zig package manager)
 zig build -Doptimize=ReleaseFast
 ```
 
-If you already have the repo, initialize the submodule and build:
+To override the vendored Emacs header, set `EMACS_INCLUDE_DIR` to a
+directory containing `emacs-module.h`, or set `EMACS_BIN_DIR` to an
+Emacs `bin/` directory.
+
+To build against a local ghostty checkout:
 
 ```sh
-git submodule update --init --recursive vendor/ghostty
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseFast --override-dep ghostty=/path/to/ghostty
 ```
 
 ### Building from source (MELPA install)
 
-MELPA packages only include `.el` files — `build.zig`, the vendored header,
-Zig sources, and the ghostty submodule are not included.  This means
-`M-x ghostel-module-compile`
-is not available when installed from MELPA.
+When installed from MELPA, `M-x ghostel-module-compile` builds the native
+module from source using `zig build`.  Zig's package manager fetches the
+ghostty dependency automatically — no git submodule needed.
 
-The recommended approach is to download a **pre-built binary** via
-`M-x ghostel-download-module` (this works regardless of install method).
-
-If you prefer to compile from source, clone the repository, build, and copy
-the resulting module into your MELPA package directory:
-
-```sh
-git clone --recurse-submodules https://github.com/dakra/ghostel.git
-cd ghostel
-zig build -Doptimize=ReleaseFast
-
-# Copy the module into your MELPA package directory
-# (adjust the path to match your Emacs package directory and ghostel version)
-cp ghostel-module.dylib ~/.emacs.d/elpa/ghostel-*/    # macOS
-cp ghostel-module.so    ~/.emacs.d/elpa/ghostel-*/    # Linux
-```
+Alternatively, download a **pre-built binary** via
+`M-x ghostel-download-module`.
 
 ## Shell Integration
 
