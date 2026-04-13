@@ -88,9 +88,10 @@ manually:
 
 Building is only needed if you don't want to use the pre-built binaries.
 Ghostel vendors a generated `include/emacs-module.h`, so normal builds do not
-require local Emacs headers or an Emacs source checkout.  If you want to
-override the vendored header, pass `-Demacs_module_dir=/path/to/include` to a
-directory containing `emacs-module.h`.
+require local Emacs headers.  If you want to override the vendored header, set
+`EMACS_INCLUDE_DIR` to a directory containing `emacs-module.h`, or set
+`EMACS_BIN_DIR` to an Emacs `bin/` directory and Ghostel will look for
+`../include` and `../share/emacs/include`.
 
 ```sh
 # Clone with submodule
@@ -98,7 +99,8 @@ git clone --recurse-submodules https://github.com/dakra/ghostel.git
 cd ghostel
 
 # Optional: override the vendored header
-# zig build -Demacs_module_dir=/path/to/include -Doptimize=ReleaseFast
+# export EMACS_INCLUDE_DIR=/path/to/include
+# export EMACS_BIN_DIR=/path/to/emacs/bin
 
 # Build everything (libghostty-vt + ghostel module)
 zig build -Doptimize=ReleaseFast

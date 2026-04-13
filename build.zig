@@ -7,9 +7,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const is_release = optimize != .Debug;
     const target_os = target.result.os.tag;
-    const emacs_module_dir = resolveEmacsModuleDir(
-        b.option([]const u8, "emacs_module_dir", "Directory containing emacs-module.h"),
-    );
+    const emacs_module_dir = resolveEmacsModuleDir(b);
     const ghostty_dep = b.lazyDependency("ghostty", .{
         .target = target,
         .optimize = optimize,
@@ -80,11 +78,64 @@ fn addModuleIncludes(
     mod.addIncludePath(b.path("vendor/ghostty/include"));
 }
 
-fn resolveEmacsModuleDir(emacs_module_dir: ?[]const u8) std.Build.LazyPath {
-    if (emacs_module_dir) |dir| {
+fn resolveEmacsModuleDir(b: *std.Build) std.Build.LazyPath {
+    if (b.graph.env_map.get("EMACS_INCLUDE_DIR")) |dir| {
+        ensureEmacsModuleHeaderExists(b.allocator, "EMACS_INCLUDE_DIR", dir);
         return .{ .cwd_relative = dir };
     }
+
+    if (b.graph.env_map.get("EMACS_BIN_DIR")) |bin_dir| {
+        const include_dir = resolveEmacsIncludeDirFromBin(b.allocator, bin_dir) orelse
+            std.debug.panic(
+                "EMACS_BIN_DIR={s} does not resolve to a directory containing emacs-module.h",
+                .{bin_dir},
+            );
+        return .{ .cwd_relative = include_dir };
+    }
+
     return .{ .cwd_relative = vendored_emacs_module_dir };
+}
+
+fn resolveEmacsIncludeDirFromBin(
+    allocator: std.mem.Allocator,
+    bin_dir: []const u8,
+) ?[]const u8 {
+    const include_dir = std.fs.path.join(allocator, &.{ bin_dir, "..", "include" }) catch
+        @panic("out of memory while resolving EMACS_BIN_DIR");
+    if (dirHasEmacsModuleHeader(allocator, include_dir)) {
+        return include_dir;
+    }
+    allocator.free(include_dir);
+
+    const share_include_dir = std.fs.path.join(
+        allocator,
+        &.{ bin_dir, "..", "share", "emacs", "include" },
+    ) catch @panic("out of memory while resolving EMACS_BIN_DIR");
+    if (dirHasEmacsModuleHeader(allocator, share_include_dir)) {
+        return share_include_dir;
+    }
+    allocator.free(share_include_dir);
+
+    return null;
+}
+
+fn ensureEmacsModuleHeaderExists(
+    allocator: std.mem.Allocator,
+    env_name: []const u8,
+    dir: []const u8,
+) void {
+    if (!dirHasEmacsModuleHeader(allocator, dir)) {
+        std.debug.panic("{s}={s} does not contain emacs-module.h", .{ env_name, dir });
+    }
+}
+
+fn dirHasEmacsModuleHeader(allocator: std.mem.Allocator, dir: []const u8) bool {
+    const header_path = std.fs.path.join(allocator, &.{ dir, "emacs-module.h" }) catch
+        @panic("out of memory while resolving emacs-module.h");
+    defer allocator.free(header_path);
+
+    std.fs.cwd().access(header_path, .{}) catch return false;
+    return true;
 }
 
 fn moduleOutputName(target_os: std.Target.Os.Tag) []const u8 {
