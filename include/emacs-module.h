@@ -23,11 +23,40 @@ This file defines the Emacs module API.  Please see the chapter
 information how to write modules and use this header file.
 */
 
+/*
+This file is vendored from GNU Emacs 31
+with local changes applied:
+
+  - musl libc workaround: pre-define struct timespec before <time.h>
+    so that Zig's translate-c sees a concrete struct instead of the
+    opaque type produced by musl's bit-field padding expressions.
+    Guard: __DEFINED_struct_timespec (musl's own include guard).
+*/
+
 #ifndef EMACS_MODULE_H
 #define EMACS_MODULE_H
 
 #include <stddef.h>
 #include <stdint.h>
+
+/* musl libc workaround — musl defines struct timespec using bit-field
+   padding expressions that Zig's translate-c cannot parse, producing
+   an opaque type.  Pre-define a plain struct that is ABI-compatible
+   (tv_sec is time_t, tv_nsec is long, padded to 2 * sizeof(time_t))
+   and set the musl guard macro so <time.h> skips its version.  */
+#ifndef __DEFINED_struct_timespec
+#if defined(__linux__) && !defined(__GLIBC__)
+#define __NEED_time_t
+#include <bits/alltypes.h>
+#define __DEFINED_struct_timespec
+struct timespec {
+    time_t tv_sec;
+    long   tv_nsec;
+    char   __padding[sizeof(time_t) - sizeof(long)];
+};
+#endif
+#endif
+
 #include <time.h>
 
 #if ((defined __STDC_VERSION__ ? __STDC_VERSION__ : 0) < 202311 \

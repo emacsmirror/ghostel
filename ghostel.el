@@ -460,7 +460,8 @@ Runs synchronously and returns non-nil on success."
     (message "ghostel: compiling native module with zig build (this may take a moment)...")
     (condition-case err
         (let ((ret (process-file "zig" nil "*ghostel-build*" nil
-                                 "build" "-Doptimize=ReleaseFast")))
+                                 "build" "-Doptimize=ReleaseFast"
+                                 "-Dcpu=baseline")))
           (if (eq ret 0)
               (progn (message "ghostel: native module compiled successfully") t)
             (display-warning 'ghostel
@@ -563,7 +564,7 @@ The output is shown in a *ghostel-build* compilation buffer."
   (interactive)
   (let ((default-directory (file-name-directory (or (locate-library "ghostel")
                                                     default-directory))))
-    (compile "zig build -Doptimize=ReleaseFast" t)))
+    (compile "zig build -Doptimize=ReleaseFast -Dcpu=baseline" t)))
 
 
 (defun ghostel--check-module-version (dir)

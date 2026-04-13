@@ -2000,7 +2000,7 @@ buffer and hand nil to the native module."
                    0)))
         (should (ghostel--compile-module "C:/ghostel/"))
         (should (equal
-                 '("zig" nil "*ghostel-build*" nil ("build" "-Doptimize=ReleaseFast") "C:/ghostel/")
+                 '("zig" nil "*ghostel-build*" nil ("build" "-Doptimize=ReleaseFast" "-Dcpu=baseline") "C:/ghostel/")
                  process-invocation))
         (should-not warnings)))))
 
@@ -2016,7 +2016,7 @@ buffer and hand nil to the native module."
                  (lambda (command &optional comint)
                    (setq compile-invocation (list command comint default-directory)))))
         (ghostel-module-compile)
-        (should (equal "zig build -Doptimize=ReleaseFast"
+        (should (equal "zig build -Doptimize=ReleaseFast -Dcpu=baseline"
                        (nth 0 compile-invocation)))
         (should (eq t (nth 1 compile-invocation)))
         (should (equal (downcase "C:/ghostel/")

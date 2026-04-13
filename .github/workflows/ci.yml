@@ -115,9 +115,9 @@ jobs:
       - name: Build native module
         run: |
           if [ -n "${{ matrix.target }}" ]; then
-            zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast
+            zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast -Dcpu=baseline
           else
-            zig build -Doptimize=ReleaseFast
+            zig build -Doptimize=ReleaseFast -Dcpu=baseline
           fi
 
       - name: Upload module artifact
