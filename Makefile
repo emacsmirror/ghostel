@@ -11,7 +11,7 @@ ELC := ghostel.elc ghostel-debug.elc
 all: build test-all test-evil lint
 
 build:
-	zig build
+	zig build -Doptimize=ReleaseFast -Dcpu=baseline
 
 # Pattern rule: rebuild .elc whenever its .el source is newer.
 # Make's timestamp tracking keeps the byte-compiled files in sync, so

@@ -313,6 +313,7 @@ pub const Sym = struct {
     @"ghostel--osc133-marker": Value,
     @"ghostel--flush-output": Value,
     @"ghostel--set-title": Value,
+    @"ghostel--debug-log-vt": Value,
     ding: Value,
 };
 

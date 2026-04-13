@@ -459,8 +459,7 @@ Runs synchronously and returns non-nil on success."
     (message "ghostel: compiling native module with zig build (this may take a moment)...")
     (condition-case err
         (let ((ret (process-file "zig" nil "*ghostel-build*" nil
-                                 "build" "-Doptimize=ReleaseFast"
-                                 "-Dcpu=baseline")))
+                                 "build" "-Doptimize=ReleaseFast" "-Dcpu=baseline")))
           (if (eq ret 0)
               (progn (message "ghostel: native module compiled successfully") t)
             (display-warning 'ghostel

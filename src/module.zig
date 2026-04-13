@@ -49,6 +49,8 @@ export fn emacs_module_init(runtime: *c.struct_emacs_runtime) callconv(.c) c_int
     env.bindFunction("ghostel--debug-feed", 2, 2, &fnDebugFeed, "Feed STR to terminal and return first row + cursor.\n\n(ghostel--debug-feed TERM STR)");
     env.bindFunction("ghostel--copy-all-text", 1, 1, &fnCopyAllText, "Return entire scrollback as plain text string.\n\n(ghostel--copy-all-text TERM)");
     env.bindFunction("ghostel--module-version", 0, 0, &fnModuleVersion, "Return the native module version string.\n\n(ghostel--module-version)");
+    env.bindFunction("ghostel--enable-vt-log", 0, 0, &fnEnableVtLog, "Enable libghostty internal log routing to *ghostel-debug*.\n\n(ghostel--enable-vt-log)");
+    env.bindFunction("ghostel--disable-vt-log", 0, 0, &fnDisableVtLog, "Disable libghostty internal log routing.\n\n(ghostel--disable-vt-log)");
 
     emacs.initSymbols(env);
     env.provide("ghostel-module");
@@ -133,9 +135,13 @@ fn fnWriteInput(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
         return env.nil();
     }
 
-    // Stash env for callbacks
+    // Stash env for callbacks (and for the VT log callback)
     term.env = env;
     defer term.env = null;
+    if (vt_log_active) {
+        vt_log_env = env;
+        defer vt_log_env = null;
+    }
 
     // Normalize CRLF: Emacs PTYs lack ONLCR, so bare \n arrives
     // without \r.  Insert \r before every bare \n.
@@ -522,6 +528,10 @@ fn fnRedraw(raw_env: ?*c.emacs_env, nargs: isize, args: [*c]c.emacs_value, _: ?*
     const env = emacs.Env.init(raw_env.?);
     const term = env.getUserPtr(Terminal, args[0]) orelse return env.nil();
     const force_full = nargs > 1 and env.isNotNil(args[1]);
+    if (vt_log_active) {
+        vt_log_env = env;
+        defer vt_log_env = null;
+    }
     render.redraw(env, term, force_full);
     return env.nil();
 }
@@ -989,4 +999,82 @@ fn titleChangedCallback(_: gt.Terminal, userdata: ?*anyopaque) callconv(.c) void
     if (term.getTitle()) |title| {
         _ = env.call1(emacs.sym.@"ghostel--set-title", env.makeString(title));
     }
+}
+
+// ---------------------------------------------------------------------------
+// libghostty log callback
+// ---------------------------------------------------------------------------
+
+/// Global Emacs env stashed during any Elisp→Zig call where logging is
+/// active.  Only valid on the main thread while a Zig function is
+/// executing; set to null at all other times.
+///
+/// Thread safety: the GhosttySysLogFn contract requires thread safety,
+/// but ghostel only drives libghostty from Emacs's main thread, so the
+/// callback always fires on the same thread that stashed the env.  If
+/// libghostty ever uses background threads, this would need a mutex or
+/// a lock-free message queue.
+var vt_log_env: ?emacs.Env = null;
+
+/// Log callback matching GhosttySysLogFn.  Formats the message and
+/// forwards it to `ghostel--debug-log-vt' in Elisp.
+fn vtLogCallback(
+    _: ?*anyopaque,
+    level: gt.c.GhosttySysLogLevel,
+    scope: [*c]const u8,
+    scope_len: usize,
+    message: [*c]const u8,
+    message_len: usize,
+) callconv(.c) void {
+    const env = vt_log_env orelse return;
+    const level_str: []const u8 = switch (level) {
+        gt.c.GHOSTTY_SYS_LOG_LEVEL_ERROR => "error",
+        gt.c.GHOSTTY_SYS_LOG_LEVEL_WARNING => "warning",
+        gt.c.GHOSTTY_SYS_LOG_LEVEL_INFO => "info",
+        gt.c.GHOSTTY_SYS_LOG_LEVEL_DEBUG => "debug",
+        else => "unknown",
+    };
+    const scope_slice: []const u8 = if (scope_len > 0) scope[0..scope_len] else "default";
+    const msg_slice: []const u8 = if (message_len > 0) message[0..message_len] else "";
+
+    _ = env.call3(
+        emacs.sym.@"ghostel--debug-log-vt",
+        env.makeString(level_str),
+        env.makeString(scope_slice),
+        env.makeString(msg_slice),
+    );
+
+    // If the Elisp call signaled an error (e.g. ghostel--debug-log-vt is
+    // void-function because ghostel-debug.el isn't loaded), clear it so it
+    // doesn't leak into the calling context and disable logging to prevent
+    // repeated errors.
+    if (env.nonLocalExitCheck() != c.emacs_funcall_exit_return) {
+        env.nonLocalExitClear();
+        _ = gt.c.ghostty_sys_set(gt.c.GHOSTTY_SYS_OPT_LOG, null);
+        vt_log_active = false;
+    }
+}
+
+/// Whether the VT log callback is installed.
+var vt_log_active: bool = false;
+
+/// (ghostel--enable-vt-log)
+fn fnEnableVtLog(raw_env: ?*c.emacs_env, _: isize, _: [*c]c.emacs_value, _: ?*anyopaque) callconv(.c) c.emacs_value {
+    const env = emacs.Env.init(raw_env.?);
+    if (!vt_log_active) {
+        const cb: gt.c.GhosttySysLogFn = &vtLogCallback;
+        _ = gt.c.ghostty_sys_set(gt.c.GHOSTTY_SYS_OPT_LOG, @ptrCast(cb));
+        vt_log_active = true;
+    }
+    return env.t();
+}
+
+/// (ghostel--disable-vt-log)
+fn fnDisableVtLog(raw_env: ?*c.emacs_env, _: isize, _: [*c]c.emacs_value, _: ?*anyopaque) callconv(.c) c.emacs_value {
+    const env = emacs.Env.init(raw_env.?);
+    if (vt_log_active) {
+        _ = gt.c.ghostty_sys_set(gt.c.GHOSTTY_SYS_OPT_LOG, null);
+        vt_log_active = false;
+    }
+    return env.t();
 }

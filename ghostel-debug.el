@@ -45,6 +45,8 @@
   (advice-add 'ghostel--filter :before #'ghostel-debug--log-filter)
   (advice-add 'ghostel--send-key :before #'ghostel-debug--log-send)
   (advice-add 'ghostel--send-encoded :before #'ghostel-debug--log-encoded)
+  (when (fboundp 'ghostel--enable-vt-log)
+    (ghostel--enable-vt-log))
   (message "ghostel-debug: logging started, check *ghostel-debug* buffer"))
 
 (defun ghostel-debug-stop ()
@@ -53,7 +55,21 @@
   (advice-remove 'ghostel--filter #'ghostel-debug--log-filter)
   (advice-remove 'ghostel--send-key #'ghostel-debug--log-send)
   (advice-remove 'ghostel--send-encoded #'ghostel-debug--log-encoded)
+  (when (fboundp 'ghostel--disable-vt-log)
+    (ghostel--disable-vt-log))
   (message "ghostel-debug: logging stopped"))
+
+(defun ghostel--debug-log-vt (level scope message)
+  "Log a libghostty-vt internal message.
+LEVEL is the severity (error/warning/info/debug).
+SCOPE is the subsystem name.  MESSAGE is the log text.
+Called from the native module's log callback."
+  (when ghostel-debug--log-buffer
+    (with-current-buffer ghostel-debug--log-buffer
+      (goto-char (point-max))
+      (insert (format "[%s] VT [%s](%s): %s\n"
+                      (format-time-string "%T.%3N")
+                      level scope message)))))
 
 (defun ghostel-debug--log-filter (_proc output)
   "Log process filter call with OUTPUT length and preview.

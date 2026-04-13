@@ -857,11 +857,21 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
     }
 
     // Resolve default colors once — used for both the scrollback append
-    // path and the viewport render path.
+    // path and the viewport render path.  These always succeed (the
+    // render state always has resolved default colors), so batching is safe.
     var default_fg = gt.ColorRgb{ .r = 204, .g = 204, .b = 204 };
     var default_bg = gt.ColorRgb{ .r = 0, .g = 0, .b = 0 };
-    _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_COLOR_FOREGROUND, @ptrCast(&default_fg));
-    _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_COLOR_BACKGROUND, @ptrCast(&default_bg));
+    {
+        const color_keys = [_]gt.c.GhosttyRenderStateData{
+            gt.RS_DATA_COLOR_FOREGROUND,
+            gt.RS_DATA_COLOR_BACKGROUND,
+        };
+        var color_values = [_]?*anyopaque{
+            @ptrCast(&default_fg),
+            @ptrCast(&default_bg),
+        };
+        _ = gt.c.ghostty_render_state_get_multi(term.render_state, color_keys.len, &color_keys, @ptrCast(&color_values), null);
+    }
 
     // ---- Scrollback rotation detection ------------------------------------
     // When libghostty's scrollback is at its byte cap, sustained writes
@@ -1115,7 +1125,6 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
             const row_start = env.extractInteger(env.point());
             insertAndStyle(env, &text_buf, content, &runs, run_count, default_fg, default_bg);
 
-            // Mark prompt portion so Elisp navigation can find it
             // Mark prompt portion (cell-level boundary), or entire row (row-level fallback).
             if (content.prompt_char_len > 0) {
                 env.putTextProperty(
@@ -1186,7 +1195,24 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
         }
     }
 
-    // Position cursor (viewport-relative row -> absolute line)
+    // Batch-fetch cursor style/visibility (always available).
+    var cursor_visible: bool = true;
+    var cursor_style: c_int = gt.CURSOR_BLOCK;
+    {
+        const cursor_keys = [_]gt.c.GhosttyRenderStateData{
+            gt.RS_DATA_CURSOR_VISIBLE,
+            gt.RS_DATA_CURSOR_VISUAL_STYLE,
+        };
+        var cursor_values = [_]?*anyopaque{
+            @ptrCast(&cursor_visible),
+            @ptrCast(&cursor_style),
+        };
+        _ = gt.c.ghostty_render_state_get_multi(term.render_state, cursor_keys.len, &cursor_keys, @ptrCast(&cursor_values), null);
+    }
+
+    // Position cursor (viewport-relative row -> absolute line).
+    // X/Y are only valid when HAS_VALUE is true, so query separately
+    // to avoid stopping the style batch above on NO_VALUE.
     var cursor_has_value: bool = false;
     _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VIEWPORT_HAS_VALUE, @ptrCast(&cursor_has_value));
     if (cursor_has_value) {
@@ -1201,13 +1227,6 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
             env.moveToColumn(@as(i64, cx));
         }
     }
-
-    // Update cursor style
-    var cursor_visible: bool = true;
-    _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VISIBLE, @ptrCast(&cursor_visible));
-
-    var cursor_style: c_int = gt.CURSOR_BLOCK;
-    _ = gt.c.ghostty_render_state_get(term.render_state, gt.RS_DATA_CURSOR_VISUAL_STYLE, @ptrCast(&cursor_style));
 
     _ = env.call2(
         emacs.sym.@"ghostel--set-cursor-style",
