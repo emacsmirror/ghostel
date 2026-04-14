@@ -2239,6 +2239,29 @@ buffer and hand nil to the native module."
       (should-not warned))))
 
 ;; -----------------------------------------------------------------------
+;; Test: platform tag arch normalization
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-platform-tag-normalizes-arch ()
+  "Test that amd64/arm64 arch names are normalized in platform tags."
+  ;; amd64 -> x86_64
+  (let ((system-configuration "amd64-pc-linux-gnu")
+        (system-type 'gnu/linux))
+    (should (equal (ghostel--module-platform-tag) "x86_64-linux")))
+  ;; arm64 -> aarch64
+  (let ((system-configuration "arm64-apple-darwin23.1.0")
+        (system-type 'darwin))
+    (should (equal (ghostel--module-platform-tag) "aarch64-macos")))
+  ;; x86_64 unchanged
+  (let ((system-configuration "x86_64-pc-linux-gnu")
+        (system-type 'gnu/linux))
+    (should (equal (ghostel--module-platform-tag) "x86_64-linux")))
+  ;; aarch64 unchanged
+  (let ((system-configuration "aarch64-unknown-linux-gnu")
+        (system-type 'gnu/linux))
+    (should (equal (ghostel--module-platform-tag) "aarch64-linux"))))
+
+;; -----------------------------------------------------------------------
 ;; Test: immediate redraw for interactive echo
 ;; -----------------------------------------------------------------------
 
@@ -3031,6 +3054,7 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-module-version-match
     ghostel-test-module-version-mismatch
     ghostel-test-module-version-newer-than-minimum
+    ghostel-test-platform-tag-normalizes-arch
     ghostel-test-title-does-not-overwrite-manual-rename
     ghostel-test-title-tracking-disabled
     ghostel-test-immediate-redraw-triggers-on-small-echo

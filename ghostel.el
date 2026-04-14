@@ -416,7 +416,11 @@ Bump this only when the Elisp code requires a newer native module
 (defun ghostel--module-platform-tag ()
   "Return platform tag for the current system, e.g. \"x86_64-linux\".
 Returns nil if the platform is not recognized."
-  (let* ((arch (car (split-string system-configuration "-")))
+  (let* ((raw-arch (car (split-string system-configuration "-")))
+         (arch (pcase raw-arch
+                 ("amd64" "x86_64")
+                 ("arm64" "aarch64")
+                 (_ raw-arch)))
          (os (cond
               ((eq system-type 'darwin) "macos")
               ((eq system-type 'gnu/linux) "linux")
