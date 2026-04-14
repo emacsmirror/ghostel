@@ -1881,6 +1881,22 @@ buffer and hand nil to the native module."
             (should (null cursor-type))))                   ; cursor hidden again
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-ignore-cursor-change ()
+  "Test that `ghostel-ignore-cursor-change' suppresses cursor style updates."
+  (let ((buf (generate-new-buffer " *ghostel-test-ignore-cursor*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          ;; Default: cursor changes are applied
+          (let ((ghostel-ignore-cursor-change nil))
+            (ghostel--set-cursor-style 2 t)
+            (should (equal cursor-type '(hbar . 2))))
+          ;; With ignore: cursor changes are suppressed
+          (let ((ghostel-ignore-cursor-change t))
+            (ghostel--set-cursor-style 1 t)
+            (should (equal cursor-type '(hbar . 2)))))  ; unchanged
+      (kill-buffer buf))))
+
 ;; -----------------------------------------------------------------------
 ;; Test: copy-mode hl-line-mode management
 ;; -----------------------------------------------------------------------
@@ -2998,6 +3014,7 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-osc51-eval-catches-errors
     ghostel-test-flush-pending-output-preserves-buffer
     ghostel-test-copy-mode-cursor
+    ghostel-test-ignore-cursor-change
     ghostel-test-copy-mode-hl-line
     ghostel-test-project-buffer-name
     ghostel-test-project-universal-arg

@@ -393,6 +393,7 @@ individual faces with `M-x customize-face`.
 | `ghostel-enable-osc52`           | `nil`                | Allow apps to set clipboard via OSC 52                   |
 | `ghostel-enable-url-detection`   | `t`                  | Linkify plain-text URLs in terminal output               |
 | `ghostel-enable-file-detection`  | `t`                  | Linkify file:line references in terminal output          |
+| `ghostel-ignore-cursor-change`   | `nil`                | Ignore terminal-driven cursor shape/visibility changes   |
 | `ghostel-keymap-exceptions`      | `("C-c" "C-x" ...)` | Keys passed through to Emacs                             |
 | `ghostel-exit-functions`         | `nil`                | Hook run when the shell process exits                    |
 

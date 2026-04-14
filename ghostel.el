@@ -266,6 +266,13 @@ When nil, falls back to `tramp-default-method'."
 These keys pass through to Emacs instead."
   :type '(repeat string))
 
+(defcustom ghostel-ignore-cursor-change nil
+  "When non-nil, ignore terminal requests to change cursor shape or visibility.
+Useful when editor-owned cursor behavior should take precedence over
+terminal-driven cursor changes.  Copy mode restores `cursor-type' to its
+default value."
+  :type 'boolean)
+
 (defcustom ghostel-scroll-on-input t
   "Automatically scroll to the bottom when typing in the terminal.
 When non-nil, any character typed while the viewport is scrolled
@@ -1707,8 +1714,10 @@ buffer has not been manually renamed by the user."
   "Set the cursor style based on terminal state.
 STYLE is one of: 0=bar, 1=block, 2=underline, 3=hollow-block.
 VISIBLE is t or nil.
-Skipped when copy mode is active because copy mode manages its own cursor."
-  (unless ghostel--copy-mode-active
+Skipped when copy mode is active because copy mode manages its own
+cursor, or when `ghostel-ignore-cursor-change' is non-nil."
+  (unless (or ghostel--copy-mode-active
+              ghostel-ignore-cursor-change)
     (setq cursor-type
           (if visible
               (pcase style
