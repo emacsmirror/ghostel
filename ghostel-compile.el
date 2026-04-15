@@ -442,7 +442,7 @@ clear-screen handlers after we send `\\f' to refresh the display).
 When we transition from `pending' to `armed', snap the scan
 marker to the current `point-max'.  The scan marker must land
 *after* any content the shell rendered in response to our clear
-(the fresh prompt re-echo), which arrives asynchronously through
+\(the fresh prompt re-echo), which arrives asynchronously through
 the process filter — not synchronously during `ghostel-compile'.
 The C marker is emitted by the shell's preexec / DEBUG trap right
 before the user's command starts producing output, so point-max

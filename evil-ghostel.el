@@ -72,8 +72,9 @@
 
 (defun evil-ghostel--around-redraw (orig-fn term &optional full)
   "Preserve Emacs point during redraws in evil normal state.
+ORIG-FN is the advised `ghostel--redraw' called with TERM and FULL.
 Without this, the ~30fps redraw timer would snap point back to
-the terminal cursor, undoing any evil normal-mode navigation."
+the terminal cursor, undoing any evil `normal-mode' navigation."
   (if (and evil-ghostel-mode
            (not (eq evil-state 'insert))
            (not (ghostel--mode-enabled term 1049)))
@@ -88,6 +89,7 @@ the terminal cursor, undoing any evil normal-mode navigation."
 
 (defun evil-ghostel--override-cursor-style (orig-fn style visible)
   "Let evil control cursor shape instead of the terminal.
+ORIG-FN is the advised setter called with STYLE and VISIBLE.
 In alt-screen mode, defer to the terminal's cursor style."
   (if (and evil-ghostel-mode
            ghostel--term
@@ -111,7 +113,7 @@ Set by the `I'/`A' advice which send Home/End directly.")
 (defun evil-ghostel--insert-state-entry ()
   "Sync terminal cursor to Emacs point when entering insert state.
 Skipped when `evil-ghostel--sync-inhibit' is set (by I/A advice
-which already sent C-a/C-e).
+which already sent Ctrl-a/Ctrl-e).
 When point is on a different row from the terminal cursor, snap
 back to the terminal cursor instead of sending up/down arrows
 which the shell would interpret as history navigation."
@@ -137,13 +139,13 @@ cursor."
 ;; ---------------------------------------------------------------------------
 
 (defun evil-ghostel--before-insert-line (&rest _)
-  "Send C-a to move terminal cursor to start of input."
+  "Send Ctrl-a to move terminal cursor to start of input."
   (when (and evil-ghostel-mode ghostel--term)
     (ghostel--send-encoded "a" "ctrl")
     (setq evil-ghostel--sync-inhibit t)))
 
 (defun evil-ghostel--before-append-line (&rest _)
-  "Send C-e to move terminal cursor to end of input."
+  "Send Ctrl-e to move terminal cursor to end of input."
   (when (and evil-ghostel-mode ghostel--term)
     (ghostel--send-encoded "e" "ctrl")
     (setq evil-ghostel--sync-inhibit t)))
@@ -172,6 +174,8 @@ escape sequence is not bound in all shell configurations."
 (defun evil-ghostel--around-delete
     (orig-fn beg end &optional type register yank-handler)
   "Intercept `evil-delete' in ghostel buffers.
+ORIG-FN is the advised `evil-delete' called with BEG, END, TYPE,
+REGISTER, and YANK-HANDLER.
 Yanks text to REGISTER, then deletes via PTY.
 Covers d, dd, D, x, X."
   (if (evil-ghostel--active-p)
@@ -193,6 +197,8 @@ Covers d, dd, D, x, X."
 (defun evil-ghostel--around-change
     (orig-fn beg end type register yank-handler &optional delete-func)
   "Intercept `evil-change' in ghostel buffers.
+ORIG-FN is the advised `evil-change' called with BEG, END, TYPE,
+REGISTER, YANK-HANDLER, and DELETE-FUNC.
 Deletes via PTY, then enters insert state.
 Covers c, cc, C, s, S."
   (if (evil-ghostel--active-p)
@@ -210,6 +216,8 @@ Covers c, cc, C, s, S."
 
 (defun evil-ghostel--around-replace (orig-fn beg end type char)
   "Intercept `evil-replace' in ghostel buffers.
+ORIG-FN is the advised `evil-replace' called with BEG, END, TYPE,
+and CHAR.
 Deletes the range, then inserts replacement characters."
   (if (evil-ghostel--active-p)
       (when char
@@ -221,6 +229,8 @@ Deletes the range, then inserts replacement characters."
 (defun evil-ghostel--around-paste-after
     (orig-fn count &optional register yank-handler)
   "Intercept `evil-paste-after' in ghostel buffers.
+ORIG-FN is the advised `evil-paste-after' called with COUNT,
+REGISTER, and YANK-HANDLER.
 Pastes from REGISTER via the terminal PTY."
   (if (evil-ghostel--active-p)
       (let ((text (if register
@@ -237,6 +247,8 @@ Pastes from REGISTER via the terminal PTY."
 (defun evil-ghostel--around-paste-before
     (orig-fn count &optional register yank-handler)
   "Intercept `evil-paste-before' in ghostel buffers.
+ORIG-FN is the advised `evil-paste-before' called with COUNT,
+REGISTER, and YANK-HANDLER.
 Pastes from REGISTER via the terminal PTY."
   (if (evil-ghostel--active-p)
       (let ((text (if register
@@ -276,15 +288,16 @@ Used for insert-state Ctrl keys that have readline/zle equivalents."
 (dolist (key evil-ghostel--ctrl-passthrough-keys)
   (let ((k key))
     (evil-define-key* 'insert evil-ghostel-mode-map
-      (kbd (concat "C-" k))
-      (defalias (intern (format "evil-ghostel--passthrough-ctrl-%s" k))
-        (lambda ()
-          (interactive)
-          (evil-ghostel--passthrough-ctrl k))
-        (format "Send C-%s to the terminal or fall back to evil." k)))))
+                      (kbd (concat "C-" k))
+                      (defalias (intern (format "evil-ghostel--passthrough-ctrl-%s" k))
+                        (lambda ()
+                          (interactive)
+                          (evil-ghostel--passthrough-ctrl k))
+                        (format "Send C-%s to the terminal or fall back to evil." k)))))
 
 (defun evil-ghostel--around-undo (orig-fn count)
   "Intercept `evil-undo' in ghostel buffers.
+ORIG-FN is the advised `evil-undo' called with COUNT.
 Sends Ctrl+_ (readline undo) COUNT times."
   (if (evil-ghostel--active-p)
       (dotimes (_ (or count 1))
@@ -292,7 +305,8 @@ Sends Ctrl+_ (readline undo) COUNT times."
     (funcall orig-fn count)))
 
 (defun evil-ghostel--around-redo (orig-fn count)
-  "Intercept `evil-redo' in ghostel buffers."
+  "Intercept `evil-redo' in ghostel buffers.
+ORIG-FN is the advised `evil-redo' called with COUNT."
   (if (evil-ghostel--active-p)
       (message "Redo not supported in terminal")
     (funcall orig-fn count)))

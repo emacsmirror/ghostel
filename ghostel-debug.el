@@ -353,7 +353,7 @@ state, and settings into *ghostel-debug* for pasting into bug reports."
                                       (file-attribute-size attrs)))
                       (insert (format "Module modified:     %s\n"
                                       (format-time-string
-                                       "%Y-%m-%d %H:%M:%S"
+                                       "%F %T"
                                        (file-attribute-modification-time attrs)))))
                   (insert (format "Module file:         NOT FOUND in %s\n" dir)))))))
         ;; Terminal state
