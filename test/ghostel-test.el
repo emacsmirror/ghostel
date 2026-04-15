@@ -2353,6 +2353,49 @@ the kill-buffer in `--get-or-create-buffer')."
             (should (equal "/some/project/" dir-at-call))))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-compile-recompile-edit-command-prefix-arg ()
+  "`ghostel-recompile' with a prefix arg (EDIT-COMMAND non-nil) must
+prompt for the command and run the edited version, matching the
+behaviour of \\[recompile]."
+  (let ((buf (generate-new-buffer " *ghostel-test-recompile-edit*"))
+        (inhibit-message t))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (ghostel-compile-mode 1)
+          (setq ghostel-compile--command "make old"
+                ghostel-compile--directory "/some/project/")
+          (let ((cmd-at-call nil)
+                (prompt-default nil))
+            (cl-letf (((symbol-function 'ghostel-compile)
+                       (lambda (cmd) (setq cmd-at-call cmd)))
+                      ((symbol-function 'read-shell-command)
+                       (lambda (_prompt default &rest _)
+                         (setq prompt-default default)
+                         "make new"))
+                      ((symbol-function 'get-buffer)
+                       (lambda (name)
+                         (if (equal name ghostel-compile-buffer-name) buf
+                           (funcall (symbol-function 'get-buffer) name)))))
+              ;; With edit-command t: user is prompted, runs edited cmd.
+              (ghostel-recompile t)
+              (should (equal "make old" prompt-default))        ; default was the last cmd
+              (should (equal "make new" cmd-at-call)))           ; chosen cmd is used
+            ;; Without the prefix: no prompt, runs the last cmd verbatim.
+            (setq cmd-at-call nil prompt-default nil)
+            (cl-letf (((symbol-function 'ghostel-compile)
+                       (lambda (cmd) (setq cmd-at-call cmd)))
+                      ((symbol-function 'read-shell-command)
+                       (lambda (&rest _) (setq prompt-default t) "never"))
+                      ((symbol-function 'get-buffer)
+                       (lambda (name)
+                         (if (equal name ghostel-compile-buffer-name) buf
+                           (funcall (symbol-function 'get-buffer) name)))))
+              (ghostel-recompile)
+              (should-not prompt-default)                        ; no prompt
+              (should (equal "make old" cmd-at-call)))))         ; last cmd re-run
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-compile-finalize-pins-default-directory ()
   "Finalize must pin `default-directory' to the captured value.
 Even if the shell drifted via OSC 7 or the user customized things,
@@ -4337,6 +4380,7 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-compile-bash-integration-saves-real-status
     ghostel-test-compile-finalize-pins-default-directory
     ghostel-test-compile-recompile-uses-original-directory
+    ghostel-test-compile-recompile-edit-command-prefix-arg
     ghostel-test-compile-finalize-switches-major-mode
     ghostel-test-compile-recompile-key-binding
     ghostel-test-compile-recompile-overrides-compile-g

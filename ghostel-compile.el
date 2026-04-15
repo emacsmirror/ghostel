@@ -281,7 +281,7 @@ Plain text, matching the `M-x compile' footer format."
                        ((numberp exit)
                         (format "exited abnormally with code %d" exit))
                        (t "finished"))))
-    (format "\nCompilation %s at %s, duration %s\n"
+    (format "Compilation %s at %s, duration %s\n"
             status-word ts (ghostel-compile--format-duration duration))))
 
 (defun ghostel-compile--set-mode-line-running ()
@@ -646,11 +646,15 @@ Requires shell integration; see `ghostel-shell-integration'."
     (pop-to-buffer buffer (append display-buffer--same-window-action
                                   '((category . comint))))))
 
-(defun ghostel-recompile ()
+(defun ghostel-recompile (&optional edit-command)
   "Re-run the last `ghostel-compile' command in its original directory.
+If EDIT-COMMAND is non-nil, prompt for the command so the user can
+edit it before running — interactively this is triggered by a
+prefix arg, matching the convention of \\[recompile].
+
 Falls back to `compile-command' (and the current `default-directory')
 when no ghostel compile has run yet."
-  (interactive)
+  (interactive "P")
   (let* ((buf (get-buffer ghostel-compile-buffer-name))
          (cmd (or (and (buffer-live-p buf)
                        (buffer-local-value 'ghostel-compile--command buf))
@@ -660,6 +664,14 @@ when no ghostel compile has run yet."
                   default-directory)))
     (unless (and cmd (not (string-blank-p cmd)))
       (user-error "No previous `ghostel-compile' command to re-run"))
+    (when edit-command
+      (setq cmd (read-shell-command
+                 "Ghostel compile: " cmd
+                 (if (equal (car compile-history) cmd)
+                     '(compile-history . 1)
+                   'compile-history)))
+      (unless (equal cmd (eval compile-command t))
+        (setq compile-command cmd)))
     (let ((default-directory dir))
       (ghostel-compile cmd))))
 
