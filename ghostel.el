@@ -669,25 +669,47 @@ DIR is the module directory."
       (unless noninteractive
         (ghostel--ensure-module dir)))))
 
-;; Load the native module
-(unless (featurep 'ghostel-module)
-  (let* ((dir (file-name-directory (or load-file-name buffer-file-name)))
-         (mod (expand-file-name
-               (concat "ghostel-module" module-file-suffix) dir)))
-    (unless (or (file-exists-p mod) noninteractive)
-      (ghostel--ensure-module dir))
-    (if (file-exists-p mod)
+(defun ghostel--load-module (&optional prompt-user)
+  "Ensure the ghostel native module is loaded.
+When the module file is missing, trigger `ghostel-module-auto-install'.
+When PROMPT-USER is non-nil (called from an interactive command like
+`ghostel'), failures signal `user-error' so the calling flow aborts.
+Otherwise (load time), failures `display-warning' instead so the user
+can still compile ghostel, read docs, and so on."
+  (unless (featurep 'ghostel-module)
+    (let* ((dir (file-name-directory (or load-file-name
+                                         (locate-library "ghostel")
+                                         buffer-file-name)))
+           (mod (expand-file-name
+                 (concat "ghostel-module" module-file-suffix) dir)))
+      (unless (or (file-exists-p mod) noninteractive)
+        (ghostel--ensure-module dir))
+      (cond
+       ((file-exists-p mod)
         (condition-case err
             (progn
               (module-load mod)
               (ghostel--check-module-version dir))
           (error
-           (display-warning 'ghostel
-                            (format "Failed to load native module: %s\nTry M-x ghostel-module-compile to rebuild"
-                                    (error-message-string err)))))
-      (display-warning 'ghostel
-                       (concat "Native module not found: " mod
-                               "\nRun M-x ghostel-download-module or M-x ghostel-module-compile")))))
+           (if prompt-user
+               (user-error "Failed to load ghostel native module: %s"
+                           (error-message-string err))
+             (display-warning
+              'ghostel
+              (format "Failed to load native module: %s\nTry M-x ghostel-module-compile to rebuild"
+                      (error-message-string err)))))))
+       (prompt-user
+        (user-error "Ghostel native module not found: %s.  Run M-x ghostel-download-module or M-x ghostel-module-compile"
+                    mod))
+       (t
+        (display-warning
+         'ghostel
+         (concat "Native module not found: " mod
+                 "\nRun M-x ghostel-download-module or M-x ghostel-module-compile")))))))
+
+;; Load the native module now so the rest of this file (declare-function,
+;; feature consumers) sees it.  Failure is non-fatal at load time.
+(ghostel--load-module)
 
 
 ;;; Internal variables
@@ -2799,17 +2821,6 @@ prevent redraw flicker."
 
 ;;; Entry point
 
-(defun ghostel--load-module ()
-  "Load the ghostel native module if it is not already loaded."
-  (unless (fboundp 'ghostel--new)
-    (let ((dir (file-name-directory (locate-library "ghostel"))))
-      (ghostel--ensure-module dir)
-      (let ((mod (expand-file-name
-                  (concat "ghostel-module" module-file-suffix) dir)))
-        (if (file-exists-p mod)
-            (module-load mod)
-          (user-error "Ghostel native module not available"))))))
-
 ;;;###autoload
 (defun ghostel (&optional arg)
   "Start a new Ghostel terminal.  If the buffer already exists, switch to it.
@@ -2818,7 +2829,7 @@ With a numeric prefix ARG, switch to the buffer with that number or
 create it if it doesn't exist yet.
 The name of the buffer is determined by the value of `ghostel-buffer-name'."
   (interactive "P")
-  (ghostel--load-module)
+  (ghostel--load-module t)
   (let ((buffer (cond ((numberp arg)
                        (get-buffer-create (format "%s<%d>"
                                                   ghostel-buffer-name
@@ -2852,7 +2863,7 @@ to `/bin/sh -c', so shell metacharacters are not interpreted; pass
 extra tokens via ARGS, a list of strings.  Returns the process.
 
 Signals `user-error' if BUFFER already has a live ghostel process."
-  (ghostel--load-module)
+  (ghostel--load-module t)
   (when (and (buffer-local-value 'ghostel--process buffer)
              (process-live-p (buffer-local-value 'ghostel--process buffer)))
     (user-error "Buffer %s already has a running ghostel process"
