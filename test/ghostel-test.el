@@ -13,6 +13,7 @@
 (require 'ert)
 (require 'ghostel)
 (require 'ghostel-compile)
+(require 'ghostel-eshell)
 
 (declare-function ghostel--cleanup-temp-paths "ghostel")
 
@@ -5194,6 +5195,93 @@ while :; do sleep 0.1; done'\n")
         (kill-buffer buf)))))
 
 
+;; -----------------------------------------------------------------------
+;; Test: ghostel-exec public API
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-exec-errors-on-live-process ()
+  "`ghostel-exec' signals `user-error' if BUFFER has a live process."
+  (let ((buf (generate-new-buffer " *ghostel-exec-test*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq ghostel--process 'fake-process))
+          (cl-letf (((symbol-function 'ghostel--load-module) #'ignore)
+                    ((symbol-function 'process-live-p)
+                     (lambda (p) (eq p 'fake-process))))
+            (should-error (ghostel-exec buf "ls" nil) :type 'user-error)))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-exec-calls-spawn-pty-with-expected-args ()
+  "`ghostel-exec' forwards PROGRAM, ARGS, size, stty flags, and remote-p."
+  (let ((buf (generate-new-buffer " *ghostel-exec-test*"))
+        captured)
+    (unwind-protect
+        (cl-letf (((symbol-function 'ghostel--load-module) #'ignore)
+                  ((symbol-function 'ghostel--new)
+                   (lambda (&rest _) 'fake-term))
+                  ((symbol-function 'ghostel--apply-palette) #'ignore)
+                  ((symbol-function 'ghostel--spawn-pty)
+                   (lambda (&rest args) (setq captured args) 'fake-proc)))
+          (ghostel-exec buf "less" '("/etc/hosts"))
+          ;; Signature: program args height width stty-flags extra-env remote-p
+          (should (equal (nth 0 captured) "less"))
+          (should (equal (nth 1 captured) '("/etc/hosts")))
+          (should (numberp (nth 2 captured)))
+          (should (numberp (nth 3 captured)))
+          (should (equal (nth 4 captured) "erase '^?' iutf8 -ixon echo"))
+          (should (null (nth 5 captured)))
+          ;; Local default-directory — no TRAMP — so remote-p must be nil.
+          (should (null (nth 6 captured))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-exec-threads-remote-p-from-tramp-dir ()
+  "`ghostel-exec' derives remote-p from BUFFER's `default-directory'."
+  (let ((buf (generate-new-buffer " *ghostel-exec-test*"))
+        captured)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local default-directory "/ssh:somehost:/home/user/"))
+          (cl-letf (((symbol-function 'ghostel--load-module) #'ignore)
+                    ((symbol-function 'ghostel--new)
+                     (lambda (&rest _) 'fake-term))
+                    ((symbol-function 'ghostel--apply-palette) #'ignore)
+                    ((symbol-function 'ghostel--spawn-pty)
+                     (lambda (&rest args) (setq captured args) 'fake-proc)))
+            (ghostel-exec buf "ls" nil)
+            (should (nth 6 captured))))
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
+;; Test: ghostel-eshell integration
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-eshell-visual-command-mode-toggles-advice ()
+  "Enabling/disabling the mode adds/removes the `eshell-exec-visual' advice."
+  (let ((was-on ghostel-eshell-visual-command-mode))
+    (unwind-protect
+        (progn
+          (ghostel-eshell-visual-command-mode -1)
+          (should-not (advice-member-p #'ghostel-eshell--exec-visual
+                                       'eshell-exec-visual))
+          (ghostel-eshell-visual-command-mode 1)
+          (should (advice-member-p #'ghostel-eshell--exec-visual
+                                   'eshell-exec-visual))
+          (ghostel-eshell-visual-command-mode -1)
+          (should-not (advice-member-p #'ghostel-eshell--exec-visual
+                                       'eshell-exec-visual)))
+      (ghostel-eshell-visual-command-mode (if was-on 1 -1)))))
+
+(ert-deftest ghostel-test-eshell/ghostel-dispatches-to-exec-visual ()
+  "`eshell/ghostel' forwards its arguments to `eshell-exec-visual'."
+  (let (captured)
+    (cl-letf (((symbol-function 'eshell-exec-visual)
+               (lambda (&rest args) (setq captured args))))
+      (eshell/ghostel "vim" "file.txt")
+      (should (equal captured '("vim" "file.txt"))))))
+
+
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
@@ -5315,7 +5403,12 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-compile-uses-compile-command
     ghostel-test-compile-interactive-uses-compile-history
     ghostel-test-compile-respects-compilation-read-command
-    ghostel-test-viewport-start-skips-trailing-newline)
+    ghostel-test-viewport-start-skips-trailing-newline
+    ghostel-test-exec-errors-on-live-process
+    ghostel-test-exec-calls-spawn-pty-with-expected-args
+    ghostel-test-exec-threads-remote-p-from-tramp-dir
+    ghostel-test-eshell-visual-command-mode-toggles-advice
+    ghostel-test-eshell/ghostel-dispatches-to-exec-visual)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()

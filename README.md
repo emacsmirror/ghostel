@@ -20,6 +20,7 @@ process, keymap, and buffer.
 - [Configuration](#configuration)
 - [Commands](#commands)
   - [Compilation mode](#compilation-mode)
+  - [Eshell integration](#eshell-integration)
 - [Running Tests](#running-tests)
 - [Performance](#performance)
 - [Ghostel vs vterm](#ghostel-vs-vterm)
@@ -536,14 +537,14 @@ was invoked from, regardless of which buffer you're in when you press
 
 Ghostel-specific customisation:
 
-| Option                                | Effect                                                                                                          |
-|---------------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| `ghostel-compile-buffer-name`         | Buffer name (default `*ghostel-compile*`)                                                                        |
+| Option                                | Effect                                                                                                             |
+|---------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `ghostel-compile-buffer-name`         | Buffer name (default `*ghostel-compile*`)                                                                          |
 | `ghostel-compile-finished-major-mode` | Major mode to switch to after each run (default `ghostel-compile-view-mode`; set to nil to stay in `ghostel-mode`) |
-| `ghostel-compile-hide-prompts`        | Hide surrounding shell prompts (default `t`)                                                                     |
-| `ghostel-compile-clear-buffer`        | Clear the buffer before each run (default `t`)                                                                   |
-| `ghostel-compile-finish-functions`    | Ghostel-specific finish hook (runs alongside `compilation-finish-functions`)                                     |
-| `ghostel-compile-debug`               | Log every OSC 133 C/D event to `*Messages*` (default `nil`)                                                      |
+| `ghostel-compile-hide-prompts`        | Hide surrounding shell prompts (default `t`)                                                                       |
+| `ghostel-compile-clear-buffer`        | Clear the buffer before each run (default `t`)                                                                     |
+| `ghostel-compile-finish-functions`    | Ghostel-specific finish hook (runs alongside `compilation-finish-functions`)                                       |
+| `ghostel-compile-debug`               | Log every OSC 133 C/D event to `*Messages*` (default `nil`)                                                        |
 
 Completion is detected via the OSC 133 `D;<exit>` semantic prompt
 marker, so shell integration (`ghostel-shell-integration`, enabled by
@@ -561,6 +562,49 @@ command in *any* ghostel buffer:
 
 Errors raised by individual hook functions are caught and logged so
 one bad consumer can't break the rest.
+
+### Eshell integration
+
+`ghostel-eshell-visual-command-mode` makes eshell run "visual" commands
+— programs in `eshell-visual-commands`, `eshell-visual-subcommands`,
+and `eshell-visual-options` (vim, htop, less, top, `git log`'s pager,
+…) — inside a dedicated ghostel buffer instead of the default
+`term-mode` fallback, so they get a real terminal emulator.
+
+```elisp
+(require 'ghostel-eshell)
+(add-hook 'eshell-load-hook #'ghostel-eshell-visual-command-mode)
+```
+
+When the program exits, the buffer stays on `[Process exited]` so
+you can read any remaining output (window point snaps to the end so
+it's visible without scrolling).  Press `q` to dismiss the dead
+buffer.  Set `eshell-destroy-buffer-when-process-dies` to `t` to
+kill the buffer automatically on exit instead.
+
+To run an ad-hoc command in a ghostel buffer without editing
+`eshell-visual-commands`, use the `ghostel` eshell built-in:
+
+```
+~ $ ghostel nethack
+```
+
+Add a shorter alias if you like:
+
+```elisp
+(defalias 'eshell/v 'eshell/ghostel)    ;; then:  ~ $ v nethack
+```
+
+Customisation:
+
+| Option                       | Effect                                                                                                                    |
+|------------------------------|---------------------------------------------------------------------------------------------------------------------------|
+| `ghostel-eshell-track-title` | When non-nil, let programs rename the visual-command buffer via OSC title escapes.  Default `nil` (keeps `*vim*` stable). |
+
+The public primitive behind the mode is `ghostel-exec BUFFER PROGRAM
+&optional ARGS`, which launches an arbitrary program in a ghostel
+buffer with no shell integration applied.  Useful for building your
+own integrations.
 
 ## Running Tests
 

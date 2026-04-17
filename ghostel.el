@@ -2260,6 +2260,73 @@ Returns nil on failure."
               (error-message-string err))
      nil)))
 
+(defun ghostel--spawn-pty (program program-args height width stty-flags
+                                   extra-env &optional remote-p)
+  "Spawn PROGRAM with PROGRAM-ARGS as a PTY-backed process in the current buffer.
+
+Wraps PROGRAM in `/bin/sh -c' so that `stty' can configure the PTY
+\(with STTY-FLAGS plus rows=HEIGHT columns=WIDTH) and the screen is
+cleared before PROGRAM is exec'd.  EXTRA-ENV is prepended to
+`process-environment'.  Non-nil REMOTE-P spawns the process via the
+TRAMP file handler (for remote shells).
+
+Installs `ghostel--filter' and `ghostel--sentinel', sets binary I/O,
+matches the PTY window size, and stores the process in
+`ghostel--process'.  Returns the process."
+  ;; Wrap the program in /bin/sh -c so we can configure the PTY
+  ;; before the program reads its terminal attributes:
+  ;;  - erase '^?': Emacs PTYs leave VERASE undefined, but
+  ;;    shells like fish check VERASE at startup to decide
+  ;;    whether \x7f means backspace.
+  ;;  - iutf8: kernel-level UTF-8 awareness so backspace
+  ;;    correctly erases multi-byte characters.
+  ;;  - -ixon: disable XON/XOFF flow control so C-q and C-s
+  ;;    pass through to the application instead of being
+  ;;    swallowed by the PTY line discipline.
+  ;;  - echo (bash-only): readline buffers its own echo, so
+  ;;    we need PTY-level echo early in startup.  Old bash
+  ;;    versions (notably macOS /bin/bash 3.2) may initialize
+  ;;    readline before ENV-sourced integration runs.
+  ;; The clear-screen hides the stty output.  exec replaces
+  ;; the wrapper so only the target program remains.
+  (let* ((shell-command
+          (list "/bin/sh" "-c"
+                (concat "stty " stty-flags
+                        (format " rows %d columns %d" height width)
+                        " 2>/dev/null; "
+                        "printf '\\033[H\\033[2J'; exec "
+                        (shell-quote-argument program)
+                        (and program-args
+                             (concat " "
+                                     (mapconcat #'shell-quote-argument
+                                                program-args " "))))))
+         (process-environment
+          (append
+           (list
+            "INSIDE_EMACS=ghostel"
+            "TERM=xterm-256color"
+            "COLORTERM=truecolor")
+           extra-env
+           process-environment))
+         (proc (make-process
+                :name "ghostel"
+                :buffer (current-buffer)
+                :command shell-command
+                :connection-type 'pty
+                :file-handler remote-p
+                :filter #'ghostel--filter
+                :sentinel #'ghostel--sentinel)))
+    (setq ghostel--process proc)
+    ;; Raw binary I/O — no encoding/decoding by Emacs
+    (set-process-coding-system proc 'binary 'binary)
+    ;; Set the PTY's actual window size (ioctl TIOCSWINSZ) so that
+    ;; the program's line editor (readline/ZLE) can render properly.
+    (set-process-window-size proc height width)
+    (set-process-query-on-exit-flag proc nil)
+    (process-put proc 'adjust-window-size-function
+                 #'ghostel--window-adjust-process-window-size)
+    proc))
+
 (defun ghostel--start-process ()
   "Start the shell process with a PTY.
 When `default-directory' is a remote TRAMP path, spawn the shell
@@ -2328,22 +2395,6 @@ on the remote host."
                            (format "XDG_DATA_DIRS=%s:%s" integ-dir xdg)
                            (format "GHOSTEL_SHELL_INTEGRATION_XDG_DIR=%s"
                                    integ-dir))))))))))
-         ;; Wrap the shell in /bin/sh -c so we can configure the PTY
-         ;; before the shell reads its terminal attributes:
-         ;;  - erase '^?': Emacs PTYs leave VERASE undefined, but
-         ;;    shells like fish check VERASE at startup to decide
-         ;;    whether \x7f means backspace.
-         ;;  - iutf8: kernel-level UTF-8 awareness so backspace
-         ;;    correctly erases multi-byte characters.
-         ;;  - -ixon: disable XON/XOFF flow control so C-q and C-s
-         ;;    pass through to the application instead of being
-         ;;    swallowed by the PTY line discipline.
-         ;;  - echo: bash-only — readline buffers its own echo, so
-         ;;    we need PTY-level echo early in startup.  Old bash
-         ;;    versions (notably macOS /bin/bash 3.2) may initialize
-         ;;    readline before ENV-sourced integration runs.
-         ;; The clear-screen hides the stty output.  exec replaces
-         ;; the wrapper so only the shell process remains.
          (shell-args (cond
                       (remote-integration
                        (plist-get remote-integration :args))
@@ -2356,48 +2407,16 @@ on the remote host."
                       ((eq shell-type 'bash)
                        "erase '^?' iutf8 -ixon echo")
                       (t "erase '^?' iutf8 -ixon")))
-         (shell-command
-          (list "/bin/sh" "-c"
-                (concat "stty " stty-flags
-                        (format " rows %d columns %d" height width)
-                        " 2>/dev/null; "
-                        "printf '\\033[H\\033[2J'; exec "
-                        (shell-quote-argument shell)
-                        (and shell-args
-                             (concat " "
-                                     (mapconcat #'shell-quote-argument
-                                                shell-args " "))))))
-         (process-environment
-          (append
-           (list
-            "INSIDE_EMACS=ghostel"
-            "TERM=xterm-256color"
-            "COLORTERM=truecolor")
-           (unless remote-p
-             (list (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)))
-           integration-env
-           process-environment))
-         (proc (make-process
-                :name "ghostel"
-                :buffer (current-buffer)
-                :command shell-command
-                :connection-type 'pty
-                :file-handler remote-p
-                :filter #'ghostel--filter
-                :sentinel #'ghostel--sentinel)))
+         (extra-env (append
+                     (unless remote-p
+                       (list (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)))
+                     integration-env))
+         (proc (ghostel--spawn-pty shell shell-args height width
+                                   stty-flags extra-env remote-p)))
     (when remote-integration
       (ghostel--cleanup-temp-paths
        (plist-get remote-integration :temp-files)
        (plist-get remote-integration :temp-dirs)))
-    (setq ghostel--process proc)
-    ;; Raw binary I/O — no encoding/decoding by Emacs
-    (set-process-coding-system proc 'binary 'binary)
-    ;; Set the PTY's actual window size (ioctl TIOCSWINSZ) so that
-    ;; the shell's line editor (readline/ZLE) can render properly.
-    (set-process-window-size proc height width)
-    (set-process-query-on-exit-flag proc nil)
-    (process-put proc 'adjust-window-size-function
-                 #'ghostel--window-adjust-process-window-size)
     proc))
 
 
@@ -2719,6 +2738,17 @@ prevent redraw flicker."
 
 ;;; Entry point
 
+(defun ghostel--load-module ()
+  "Load the ghostel native module if it is not already loaded."
+  (unless (fboundp 'ghostel--new)
+    (let ((dir (file-name-directory (locate-library "ghostel"))))
+      (ghostel--ensure-module dir)
+      (let ((mod (expand-file-name
+                  (concat "ghostel-module" module-file-suffix) dir)))
+        (if (file-exists-p mod)
+            (module-load mod)
+          (user-error "Ghostel native module not available"))))))
+
 ;;;###autoload
 (defun ghostel (&optional arg)
   "Start a new Ghostel terminal.  If the buffer already exists, switch to it.
@@ -2727,14 +2757,7 @@ With a numeric prefix ARG, switch to the buffer with that number or
 create it if it doesn't exist yet.
 The name of the buffer is determined by the value of `ghostel-buffer-name'."
   (interactive "P")
-  (unless (fboundp 'ghostel--new)
-    (let ((dir (file-name-directory (locate-library "ghostel"))))
-      (ghostel--ensure-module dir)
-      (let ((mod (expand-file-name
-                  (concat "ghostel-module" module-file-suffix) dir)))
-        (if (file-exists-p mod)
-            (module-load mod)
-          (user-error "Ghostel native module not available")))))
+  (ghostel--load-module)
   (let ((buffer (cond ((numberp arg)
                        (get-buffer-create (format "%s<%d>"
                                                   ghostel-buffer-name
@@ -2755,6 +2778,38 @@ The name of the buffer is determined by the value of `ghostel-buffer-name'."
         (setq ghostel--term-rows height)
         (ghostel--apply-palette ghostel--term))
       (ghostel--start-process))))
+
+(defun ghostel-exec (buffer program &optional args)
+  "Run PROGRAM with ARGS as a ghostel terminal in BUFFER.
+
+BUFFER is switched into `ghostel-mode' (if not already) and a new
+terminal is created sized to the window displaying BUFFER, falling
+back to the selected window if BUFFER is not displayed.  No shell
+integration is applied — PROGRAM is exec'd directly via
+`ghostel--spawn-pty'.  PROGRAM is shell-quoted before it is passed
+to `/bin/sh -c', so shell metacharacters are not interpreted; pass
+extra tokens via ARGS, a list of strings.  Returns the process.
+
+Signals `user-error' if BUFFER already has a live ghostel process."
+  (ghostel--load-module)
+  (when (and (buffer-local-value 'ghostel--process buffer)
+             (process-live-p (buffer-local-value 'ghostel--process buffer)))
+    (user-error "Buffer %s already has a running ghostel process"
+                (buffer-name buffer)))
+  (let ((window (or (get-buffer-window buffer t) (selected-window))))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'ghostel-mode)
+        (ghostel-mode))
+      (setq ghostel--managed-buffer-name (buffer-name))
+      (let* ((height (max 1 (window-body-height window)))
+             (width (max 1 (window-max-chars-per-line window)))
+             (remote-p (file-remote-p default-directory)))
+        (setq ghostel--term
+              (ghostel--new height width ghostel-max-scrollback))
+        (setq ghostel--term-rows height)
+        (ghostel--apply-palette ghostel--term)
+        (ghostel--spawn-pty program args height width
+                            "erase '^?' iutf8 -ixon echo" nil remote-p)))))
 
 ;;;###autoload
 (defun ghostel-project (&optional arg)

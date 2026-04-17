@@ -4,7 +4,7 @@ XDG_CACHE_HOME ?= $(HOME)/.cache
 MELPAZOID_DIR  ?= $(XDG_CACHE_HOME)/melpazoid
 EVIL_DIR       ?= $(XDG_CACHE_HOME)/evil
 
-ELC := ghostel.elc ghostel-debug.elc ghostel-compile.elc
+ELC := ghostel.elc ghostel-debug.elc ghostel-compile.elc ghostel-eshell.elc
 
 .PHONY: all build test test-native test-all test-evil lint melpazoid byte-compile bench bench-quick clean
 
@@ -53,7 +53,7 @@ checkdoc:
 		              (checkdoc-proper-noun-list nil) \
 		              (checkdoc-verb-check-experimental-flag nil) \
 		              (ok t)) \
-		  (dolist (f '(\"ghostel.el\" \"ghostel-debug.el\" \"ghostel-compile.el\" \"evil-ghostel.el\")) \
+		  (dolist (f '(\"ghostel.el\" \"ghostel-debug.el\" \"ghostel-compile.el\" \"ghostel-eshell.el\" \"evil-ghostel.el\")) \
 		    (ignore-errors (kill-buffer \"*Warnings*\")) \
 		    (let ((inhibit-message t)) \
 		      (checkdoc-file f)) \
