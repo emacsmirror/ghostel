@@ -194,11 +194,9 @@ fn fnWriteInput(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
         term.vtWrite(norm_buf[0..npos]);
     }
 
-    // Scan for OSC sequences that libghostty-vt discards.
-    extractAndSetPwd(term, raw);
-    extractOsc51(env, raw);
-    extractOsc52(env, raw);
-    extractOsc133(env, raw);
+    // Scan for OSC sequences that libghostty-vt discards (7, 51, 52, 133).
+    // One pass, dispatched by code in document order.
+    dispatchPostWriteOscs(env, term, raw);
 
     return env.nil();
 }
@@ -207,127 +205,136 @@ fn fnWriteInput(raw_env: ?*c.emacs_env, _: isize, args: [*c]c.emacs_value, _: ?*
 // OSC sequence helpers
 // ---------------------------------------------------------------------------
 
-/// Find the end of an OSC sequence payload starting at `start`.
-/// Scans for the terminator: BEL (0x07) or ST (ESC \).
-/// Returns the index of the first terminator byte, or data.len if none found.
-fn findOscTerminator(data: []const u8, start: usize) usize {
-    var pos = start;
-    while (pos < data.len) {
-        if (data[pos] == 0x07) return pos; // BEL
-        if (data[pos] == 0x1b and pos + 1 < data.len and data[pos + 1] == '\\') return pos; // ST
-        pos += 1;
-    }
-    return data.len;
-}
+/// An OSC sequence extracted by `OscIterator`.
+const OscEntry = struct {
+    /// Decimal OSC code (e.g. 4, 7, 10, 11, 51, 52, 133).
+    code: u32,
+    /// Payload bytes between the code's trailing `;` and the terminator.
+    payload: []const u8,
+    /// Terminator bytes (BEL or ESC \) — forwarded back on replies.
+    term: []const u8,
+};
 
-/// Iterator-style scanner that yields successive OSC sequences matching `prefix`.
-/// Each call to `next()` returns the payload slice (after the prefix, before the
-/// terminator), or null when no more matches exist.
-const OscScanner = struct {
+/// Single-pass iterator over well-formed OSC sequences in a byte slice.
+/// Advances past `ESC ]`, parses the decimal code up to `;`, locates the
+/// BEL/ST terminator, and yields `(code, payload, term)`. Partial
+/// sequences at the end of the buffer stop iteration so the caller
+/// doesn't act on half-received data.
+const OscIterator = struct {
     data: []const u8,
-    prefix: []const u8,
     pos: usize = 0,
 
-    const Match = struct {
-        payload: []const u8,
-        end: usize,
-    };
+    fn next(self: *OscIterator) ?OscEntry {
+        while (self.pos < self.data.len) {
+            const intro = std.mem.indexOfPos(u8, self.data, self.pos, "\x1b]") orelse {
+                self.pos = self.data.len;
+                return null;
+            };
+            const code_start = intro + 2;
 
-    fn next(self: *OscScanner) ?Match {
-        while (self.pos + self.prefix.len < self.data.len) {
-            if (std.mem.startsWith(u8, self.data[self.pos..], self.prefix)) {
-                const payload_start = self.pos + self.prefix.len;
-                const payload_end = findOscTerminator(self.data, payload_start);
-                self.pos = payload_end;
-                return .{ .payload = self.data[payload_start..payload_end], .end = payload_end };
-            } else {
-                self.pos += 1;
+            // Decimal code up to the first `;`.
+            var code_end = code_start;
+            while (code_end < self.data.len and self.data[code_end] >= '0' and self.data[code_end] <= '9') {
+                code_end += 1;
             }
+            if (code_end == code_start or code_end >= self.data.len or self.data[code_end] != ';') {
+                self.pos = code_start;
+                continue;
+            }
+            const payload_start = code_end + 1;
+
+            // Terminator search. A partial OSC (no terminator before EOF)
+            // stops iteration entirely: bytes after an unterminated payload
+            // are opaque, so there's no safe way to continue scanning.
+            var end = payload_start;
+            var term_len: usize = 0;
+            while (end < self.data.len) : (end += 1) {
+                if (self.data[end] == 0x07) {
+                    term_len = 1;
+                    break;
+                }
+                if (self.data[end] == 0x1b and end + 1 < self.data.len and self.data[end + 1] == '\\') {
+                    term_len = 2;
+                    break;
+                }
+            }
+            if (term_len == 0) {
+                self.pos = self.data.len;
+                return null;
+            }
+
+            self.pos = end + term_len;
+            const code = std.fmt.parseInt(u32, self.data[code_start..code_end], 10) catch continue;
+            return .{
+                .code = code,
+                .payload = self.data[payload_start..end],
+                .term = self.data[end .. end + term_len],
+            };
         }
         return null;
     }
 };
 
-/// Scan data for OSC 51;E elisp eval sequences.
-/// OSC 51 format: ESC ] 51 ; E <quoted-args> (ST | BEL)
-/// Passes the payload (after 'E') to ghostel--osc51-eval for dispatch.
-fn extractOsc51(env: emacs.Env, data: []const u8) void {
-    var scanner = OscScanner{ .data = data, .prefix = "\x1b]51;" };
-    while (scanner.next()) |match| {
-        const payload = match.payload;
-        if (payload.len < 2) continue;
-        // Sub-command must be 'E'
-        if (payload[0] != 'E') continue;
-        _ = env.call1(
-            emacs.sym.@"ghostel--osc51-eval",
-            env.makeString(payload[1..]),
-        );
-    }
-}
-
-/// Scan data for OSC 7 sequences and set the terminal PWD.
-/// OSC 7 format: ESC ] 7 ; <url> (ST | BEL)
-fn extractAndSetPwd(term: *Terminal, data: []const u8) void {
-    var scanner = OscScanner{ .data = data, .prefix = "\x1b]7;" };
-    while (scanner.next()) |match| {
-        if (match.payload.len > 0) {
-            const gs = gt.GhosttyString{ .ptr = match.payload.ptr, .len = match.payload.len };
-            term.setPwd(&gs) catch {};
+/// Dispatch OSC 7 / 51 / 52 / 133 from `data` in document order.
+/// These are the sequences that libghostty-vt discards, so ghostel
+/// has to scan for them itself.  All four used to scan the buffer
+/// independently; one unified pass is strictly less work for bulk
+/// output and preserves source-order dispatch.
+///
+/// Runs AFTER `vtWrite` so libghostty has already seen the bytes —
+/// OSC 7 calls back into libghostty (`setPwd`) and the others call
+/// Elisp.
+fn dispatchPostWriteOscs(env: emacs.Env, term: *Terminal, data: []const u8) void {
+    var it = OscIterator{ .data = data };
+    while (it.next()) |osc| {
+        switch (osc.code) {
+            // OSC 7: working directory as a file:// URL.
+            7 => {
+                if (osc.payload.len == 0) continue;
+                const gs = gt.GhosttyString{ .ptr = osc.payload.ptr, .len = osc.payload.len };
+                term.setPwd(&gs) catch {};
+            },
+            // OSC 51;E: whitelisted Elisp eval (ghostel extension).
+            51 => {
+                if (osc.payload.len < 2 or osc.payload[0] != 'E') continue;
+                _ = env.call1(
+                    emacs.sym.@"ghostel--osc51-eval",
+                    env.makeString(osc.payload[1..]),
+                );
+            },
+            // OSC 52: clipboard set.  Queries ("?") are ignored.
+            52 => {
+                const semi = std.mem.indexOfScalar(u8, osc.payload, ';') orelse continue;
+                const selection = osc.payload[0..semi];
+                const b64 = osc.payload[semi + 1 ..];
+                if (b64.len == 0) continue;
+                if (b64.len == 1 and b64[0] == '?') continue;
+                _ = env.call2(
+                    emacs.sym.@"ghostel--osc52-handle",
+                    env.makeString(selection),
+                    env.makeString(b64),
+                );
+            },
+            // OSC 133: semantic prompt markers (A/B/C/D).
+            133 => {
+                if (osc.payload.len == 0) continue;
+                const marker_type = osc.payload[0];
+                if (marker_type != 'A' and marker_type != 'B' and marker_type != 'C' and marker_type != 'D') continue;
+                const has_param = osc.payload.len > 1 and osc.payload[1] == ';';
+                const param_data = if (has_param) osc.payload[2..] else &[_]u8{};
+                const type_str: [1]u8 = .{marker_type};
+                const param_val = if (has_param and param_data.len > 0)
+                    env.makeString(param_data)
+                else
+                    env.nil();
+                _ = env.call2(
+                    emacs.sym.@"ghostel--osc133-marker",
+                    env.makeString(&type_str),
+                    param_val,
+                );
+            },
+            else => {},
         }
-    }
-}
-
-/// Scan data for OSC 52 clipboard sequences.
-/// OSC 52 format: ESC ] 52 ; <selection> ; <base64-data> (ST | BEL)
-/// Calls ghostel--osc52-handle with the selection and base64 data.
-fn extractOsc52(env: emacs.Env, data: []const u8) void {
-    var scanner = OscScanner{ .data = data, .prefix = "\x1b]52;" };
-    while (scanner.next()) |match| {
-        const payload = match.payload;
-        // Find the ';' separating selection from data
-        const semi = std.mem.indexOfScalar(u8, payload, ';') orelse continue;
-        const selection = payload[0..semi];
-        const b64 = payload[semi + 1 ..];
-        if (b64.len == 0) continue;
-        // Ignore clipboard queries ('?')
-        if (b64.len == 1 and b64[0] == '?') continue;
-        _ = env.call2(
-            emacs.sym.@"ghostel--osc52-handle",
-            env.makeString(selection),
-            env.makeString(b64),
-        );
-    }
-}
-
-/// Scan data for OSC 133 semantic prompt markers.
-/// OSC 133 format: ESC ] 133 ; <type> [; <param>] (ST | BEL)
-/// type: A = prompt start, B = command start, C = output start, D = command finished
-/// For type D, param is the exit status.
-fn extractOsc133(env: emacs.Env, data: []const u8) void {
-    var scanner = OscScanner{ .data = data, .prefix = "\x1b]133;" };
-    while (scanner.next()) |match| {
-        const payload = match.payload;
-        if (payload.len == 0) continue;
-        const marker_type = payload[0];
-
-        // Only handle known types
-        if (marker_type != 'A' and marker_type != 'B' and marker_type != 'C' and marker_type != 'D') continue;
-
-        // Check for optional parameter after ';'
-        const has_param = payload.len > 1 and payload[1] == ';';
-        const param_data = if (has_param) payload[2..] else &[_]u8{};
-
-        const type_str: [1]u8 = .{marker_type};
-        const param_val = if (has_param and param_data.len > 0)
-            env.makeString(param_data)
-        else
-            env.nil();
-
-        _ = env.call2(
-            emacs.sym.@"ghostel--osc133-marker",
-            env.makeString(&type_str),
-            param_val,
-        );
     }
 }
 
@@ -375,13 +382,6 @@ fn sendPaletteColorReply(
     _ = env.call1(emacs.sym.@"ghostel--flush-output", env.makeString(written));
 }
 
-/// Parse a non-negative decimal integer.  Returns null on empty input,
-/// any non-digit byte, or numeric overflow of `u32`.
-fn parseDecimal(s: []const u8) ?u32 {
-    if (s.len == 0) return null;
-    return std.fmt.parseInt(u32, s, 10) catch null;
-}
-
 /// Scan data for OSC 4/10/11 color queries and emit responses in source
 /// order.  libghostty applies OSC 4/10/11 **sets** internally but silently
 /// drops the query form (`?` value), so ghostel scans the raw input and
@@ -402,72 +402,35 @@ fn extractOscColorQueries(env: emacs.Env, term: *Terminal, data: []const u8) voi
     var palette: [256]gt.ColorRgb = undefined;
     var palette_loaded = false;
 
-    var pos: usize = 0;
-    while (pos + 1 < data.len) {
-        // Find next OSC introducer "ESC ]".
-        const osc_rel = std.mem.indexOfPos(u8, data, pos, "\x1b]") orelse break;
-        const code_start = osc_rel + 2;
-
-        // Read the decimal OSC code up to the first ';'.
-        var code_end = code_start;
-        while (code_end < data.len and data[code_end] >= '0' and data[code_end] <= '9') {
-            code_end += 1;
-        }
-        if (code_end == code_start or code_end >= data.len or data[code_end] != ';') {
-            pos = code_start;
-            continue;
-        }
-        const payload_start = code_end + 1;
-
-        // Find the terminator (BEL or ST).  Require a real one — partial OSCs
-        // split across chunks are left for the next call so we don't reply
-        // before the client has finished writing its query.
-        var end = payload_start;
-        var term_len: usize = 0;
-        while (end < data.len) : (end += 1) {
-            if (data[end] == 0x07) {
-                term_len = 1;
-                break;
-            }
-            if (data[end] == 0x1b and end + 1 < data.len and data[end + 1] == '\\') {
-                term_len = 2;
-                break;
-            }
-        }
-        if (term_len == 0) break;
-
-        const payload = data[payload_start..end];
-        const term_bytes = data[end .. end + term_len];
-        pos = end + term_len;
-
-        const code = parseDecimal(data[code_start..code_end]) orelse continue;
-        switch (code) {
+    var it = OscIterator{ .data = data };
+    while (it.next()) |osc| {
+        switch (osc.code) {
             10 => {
-                if (!std.mem.eql(u8, payload, "?")) continue;
+                if (!std.mem.eql(u8, osc.payload, "?")) continue;
                 var fg: gt.ColorRgb = undefined;
                 if (!term.getColorForeground(&fg)) continue;
-                sendDynamicColorReply(env, 10, fg, term_bytes);
+                sendDynamicColorReply(env, 10, fg, osc.term);
             },
             11 => {
-                if (!std.mem.eql(u8, payload, "?")) continue;
+                if (!std.mem.eql(u8, osc.payload, "?")) continue;
                 var bg: gt.ColorRgb = undefined;
                 if (!term.getColorBackground(&bg)) continue;
-                sendDynamicColorReply(env, 11, bg, term_bytes);
+                sendDynamicColorReply(env, 11, bg, osc.term);
             },
             4 => {
                 // Payload is a ';'-separated list of `index;value` pairs.
                 // Reply only to pairs whose value is literally "?".
-                var it = std.mem.splitScalar(u8, payload, ';');
-                while (it.next()) |index_tok| {
-                    const value_tok = it.next() orelse break;
+                var sub = std.mem.splitScalar(u8, osc.payload, ';');
+                while (sub.next()) |index_tok| {
+                    const value_tok = sub.next() orelse break;
                     if (!std.mem.eql(u8, value_tok, "?")) continue;
-                    const idx = parseDecimal(index_tok) orelse continue;
+                    const idx = std.fmt.parseInt(u32, index_tok, 10) catch continue;
                     if (idx >= 256) continue;
                     if (!palette_loaded) {
                         if (!term.getColorPalette(&palette)) break;
                         palette_loaded = true;
                     }
-                    sendPaletteColorReply(env, @intCast(idx), palette[idx], term_bytes);
+                    sendPaletteColorReply(env, @intCast(idx), palette[idx], osc.term);
                 }
             },
             else => {},
