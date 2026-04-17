@@ -912,6 +912,12 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
     // A change means the top row is no longer the row we materialized
     // → wipe the buffer and let the delta-sync below re-fetch everything
     // fresh from libghostty.
+    //
+    // When the hash matches (no rotation), stash it in `cached_row0_hash`
+    // and reuse at end-of-redraw. Promotion / insert-at-tail don't shift
+    // row 0, so the start-of-redraw hash is still valid. Trim and
+    // rotation-erase invalidate the cache.
+    var cached_row0_hash: ?u64 = null;
     if (term.wrote_since_redraw and term.scrollback_in_buffer > 0 and term.first_scrollback_row_hash != 0) {
         const new_hash = computeFirstScrollbackRowHash(term);
         // computeFirstScrollbackRowHash scrolled libghostty's viewport to
@@ -926,6 +932,8 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
             term.scrollback_in_buffer = 0;
             term.first_scrollback_row_hash = 0;
             force_full = true;
+        } else {
+            cached_row0_hash = new_hash;
         }
     }
 
@@ -1030,7 +1038,9 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
         }
     } else if (libghostty_sb < term.scrollback_in_buffer) {
         // libghostty's scrollback cap evicted the oldest rows — trim the
-        // same number of lines from the top of the buffer.
+        // same number of lines from the top of the buffer. Trim shifts
+        // row 0 so the start-of-redraw hash is stale.
+        cached_row0_hash = null;
         const delta = term.scrollback_in_buffer - libghostty_sb;
         env.gotoCharN(1);
         if (env.forwardLine(@as(i64, @intCast(delta))) == 0) {
@@ -1278,10 +1288,11 @@ pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
     }
 
     // Update the cached first-scrollback-row hash for the next redraw's
-    // rotation check. Always re-sample (cheap) because previous-redraw
-    // promotion/insert/trim could have shifted the row at index 0.
+    // rotation check. Reuse the start-of-redraw hash when it's still
+    // valid (no rotation, no trim) — avoids a second scroll-to-top +
+    // render_state_update round trip per redraw.
     if (term.scrollback_in_buffer > 0) {
-        term.first_scrollback_row_hash = computeFirstScrollbackRowHash(term);
+        term.first_scrollback_row_hash = cached_row0_hash orelse computeFirstScrollbackRowHash(term);
     } else {
         term.first_scrollback_row_hash = 0;
     }
