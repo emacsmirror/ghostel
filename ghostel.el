@@ -2712,10 +2712,21 @@ No-op when `ghostel--snap-requested' (user input overrides)."
 (defun ghostel--anchor-window (win vs pt)
   "Pin WIN to viewport-start VS and sync its point to PT.
 Also resets pixel vscroll (pixel-scroll-precision-mode may leave a
-partial offset that would clip the top line after a redraw)."
+partial offset that would clip the top line after a redraw).
+
+When the TUI cursor is in pending-wrap state on the last visible row,
+PT equals `point-max' (one past the last character).  Emacs redisplay
+then classifies it as off-screen, and `scroll-conservatively' shifts
+`window-start' up by one row to make it visible — which fights the
+viewport pin and makes the block cursor disappear.  Clamp
+`window-point' back by one in that case so it sits inside the viewport;
+buffer-point is unaffected and subsequent redraws recapture the real
+cursor."
   (set-window-start win vs t)
   (set-window-vscroll win 0 t)
-  (set-window-point win pt))
+  (set-window-point win (if (and (= pt (point-max)) (> pt (point-min)))
+                            (1- pt)
+                          pt)))
 
 (defun ghostel--restore-scrollback-window (win state)
   "Restore WIN to ws/wp recorded in STATE and push STATE to scroll-positions.

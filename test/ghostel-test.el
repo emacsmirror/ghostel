@@ -3240,6 +3240,58 @@ rows in the viewport — with or without the trailing newline."
                                              (skip-chars-backward "\n")
                                              (point))))))))))
 
+(ert-deftest ghostel-test-anchor-window-clamps-pending-wrap ()
+  "`ghostel--anchor-window' must clamp PT at `point-max' by one.
+Regression test for #138: when the TUI cursor is in the pending-wrap
+state on the last visible row, the Zig cursor placement lands at
+`point-max' (one past the last character).  Emacs redisplay then
+classifies that point as off-screen and — with `scroll-conservatively'
+set by `ghostel-mode' — shifts `window-start' up by a row to make it
+visible, which fights the viewport pin and hides the block cursor.
+The anchor helper must clamp `window-point' back by one in that case."
+  (let ((buf (generate-new-buffer " *ghostel-test-anchor-clamp*"))
+        (orig-buf (window-buffer (selected-window))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "row-1\nrow-2\nlast-row-content"))
+          (set-window-buffer (selected-window) buf)
+          (let ((win (selected-window))
+                (pmax (with-current-buffer buf (point-max))))
+            ;; pt at point-max: window-point clamps back by one.
+            (with-current-buffer buf
+              (ghostel--anchor-window win (point-min) pmax))
+            (should (= (1- pmax) (window-point win)))
+            ;; pt inside the buffer: window-point is left alone.
+            (with-current-buffer buf
+              (ghostel--anchor-window win (point-min) (- pmax 3)))
+            (should (= (- pmax 3) (window-point win))))
+          ;; Buffer ending in a trailing newline: clamp still fires.
+          ;; Lands on the newline — not ideal but strictly better than
+          ;; the symptom (block cursor disappearing).  Next redraw heals.
+          (with-current-buffer buf
+            (goto-char (point-max))
+            (insert "\n"))
+          (let ((win (selected-window))
+                (pmax (with-current-buffer buf (point-max))))
+            (with-current-buffer buf
+              (ghostel--anchor-window win (point-min) pmax))
+            (should (= (1- pmax) (window-point win))))
+          ;; Empty buffer: nothing to clamp against; must not underflow.
+          (let ((empty-buf (generate-new-buffer " *ghostel-test-anchor-empty*")))
+            (unwind-protect
+                (progn
+                  (set-window-buffer (selected-window) empty-buf)
+                  (with-current-buffer empty-buf
+                    (ghostel--anchor-window (selected-window)
+                                            (point-min) (point-max)))
+                  (should (= (point-min)
+                             (window-point (selected-window)))))
+              (kill-buffer empty-buf))))
+      (when (buffer-live-p orig-buf)
+        (set-window-buffer (selected-window) orig-buf))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-redraw-anchors-window-start-on-snap-request ()
   "Redraw anchors `window-start' to the viewport when snap is requested.
 `ghostel--snap-to-input' sets `ghostel--snap-requested' on typing/paste/
@@ -5656,6 +5708,7 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-compile-global-mode-falls-through-on-comint
     ghostel-test-compile-global-mode-excluded-custom-mode
     ghostel-test-viewport-start-skips-trailing-newline
+    ghostel-test-anchor-window-clamps-pending-wrap
     ghostel-test-exec-errors-on-live-process
     ghostel-test-exec-calls-spawn-pty-with-expected-args
     ghostel-test-exec-threads-remote-p-from-tramp-dir
