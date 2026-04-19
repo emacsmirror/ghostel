@@ -212,6 +212,7 @@ history — even outside copy mode.
 - Full VT terminal emulation via libghostty-vt
 - 256-color and RGB (24-bit true color) support
 - **OSC 4 / 10 / 11 color queries** — TUI programs can query the current palette, foreground, and background colors, so tools like `duf`, `btop`, `delta`, and anything else using `termenv` auto-detect the right light/dark theme from the Emacs face colors
+- **OSC 9 / OSC 777** — desktop notifications and ConEmu progress reports (percentage shown in the mode line; see [Notifications and Progress](#notifications-and-progress))
 - Text attributes: bold, italic, faint, underline (single/double/curly/dotted/dashed with color), strikethrough, inverse
 - Cursor styles: block, bar, underline, hollow block
 - Alternate screen buffer (for TUI apps like htop, vim, etc.)
@@ -239,7 +240,6 @@ history — even outside copy mode.
 - **OSC 2** — title tracking (buffer is renamed from the terminal title)
 - **OSC 51** — call whitelisted Emacs functions from shell scripts (see [Calling Elisp from the Shell](#calling-elisp-from-the-shell))
 - **OSC 52** — clipboard support (opt-in, for remote sessions)
-- **OSC 9 / OSC 777** — desktop notifications and ConEmu progress reports (percentage shown in the mode line; see [Notifications and Progress](#notifications-and-progress))
 - `INSIDE_EMACS` and `EMACS_GHOSTEL_PATH` environment variables
 
 ### TRAMP (Remote Terminals)
@@ -799,6 +799,8 @@ powering Neovim's built-in terminal.
 | Cursor styles                 | 4 types   | 3 types |
 | OSC 8 hyperlinks              | Yes       | No      |
 | Plain-text URL/file detection | Yes       | No      |
+| OSC 9 / 777 notifications     | Yes       | No      |
+| OSC 9;4 progress reports      | Yes       | No      |
 | Kitty keyboard protocol       | Yes       | No      |
 | Mouse passthrough (SGR)       | Yes       | No      |
 | Bracketed paste               | Yes       | Yes     |
