@@ -82,6 +82,38 @@ Uses mocks for native functions."
                      evil-insert-state-entry-hook))))
 
 ;; -----------------------------------------------------------------------
+;; Test: initial-state defcustom
+;; -----------------------------------------------------------------------
+
+(ert-deftest evil-ghostel-test-initial-state-load-applied ()
+  "Current value of `evil-ghostel-initial-state' is registered with evil at load."
+  (should (eq (evil-initial-state 'ghostel-mode)
+              evil-ghostel-initial-state)))
+
+(ert-deftest evil-ghostel-test-initial-state-custom-set-updates-registry ()
+  "Setting the option via `customize-set-variable' updates evil's registry."
+  (let ((orig evil-ghostel-initial-state))
+    (unwind-protect
+        (progn
+          (customize-set-variable 'evil-ghostel-initial-state 'emacs)
+          (should (eq (evil-initial-state 'ghostel-mode) 'emacs))
+          (customize-set-variable 'evil-ghostel-initial-state 'normal)
+          (should (eq (evil-initial-state 'ghostel-mode) 'normal)))
+      (customize-set-variable 'evil-ghostel-initial-state orig))))
+
+(ert-deftest evil-ghostel-test-mode-activation-preserves-initial-state ()
+  "Enabling `evil-ghostel-mode' must not clobber the initial-state setting.
+Regression guard: the minor-mode body used to call
+`evil-set-initial-state' on every activation, overriding user config."
+  (let ((orig evil-ghostel-initial-state))
+    (unwind-protect
+        (progn
+          (customize-set-variable 'evil-ghostel-initial-state 'emacs)
+          (evil-ghostel-test--with-evil-buffer
+           (should (eq (evil-initial-state 'ghostel-mode) 'emacs))))
+      (customize-set-variable 'evil-ghostel-initial-state orig))))
+
+;; -----------------------------------------------------------------------
 ;; Test: escape-stay (evil-move-cursor-back disabled)
 ;; -----------------------------------------------------------------------
 

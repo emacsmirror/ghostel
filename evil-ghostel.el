@@ -28,6 +28,35 @@
 (require 'ghostel)
 
 ;; ---------------------------------------------------------------------------
+;; Customization
+;; ---------------------------------------------------------------------------
+
+(defgroup evil-ghostel nil
+  "Evil-mode integration for ghostel."
+  :group 'ghostel
+  :prefix "evil-ghostel-")
+
+(defcustom evil-ghostel-initial-state 'insert
+  "Initial evil state for new `ghostel-mode' buffers.
+Setting this option via `customize-set-variable', `setopt', or the
+Customize UI calls `evil-set-initial-state' so the change takes effect
+immediately.  Users who prefer the raw API can call
+`evil-set-initial-state' directly from their config — the registry is
+last-writer-wins."
+  :type '(choice (const :tag "Emacs" emacs)
+                 (const :tag "Insert" insert)
+                 (const :tag "Normal" normal)
+                 (symbol :tag "Other state"))
+  :set (lambda (sym val)
+         (set-default-toplevel-value sym val)
+         (evil-set-initial-state 'ghostel-mode val)))
+
+;; Apply the current value at load.  Covers the case where the user set
+;; the variable with plain `setq' before loading the package — in that
+;; path `defcustom' preserves the value without invoking `:set'.
+(evil-set-initial-state 'ghostel-mode evil-ghostel-initial-state)
+
+;; ---------------------------------------------------------------------------
 ;; Guard predicate
 ;; ---------------------------------------------------------------------------
 
@@ -334,7 +363,6 @@ state transitions."
   :keymap evil-ghostel-mode-map
   (if evil-ghostel-mode
       (progn
-        (evil-set-initial-state 'ghostel-mode 'insert)
         (evil-ghostel--escape-stay)
         (add-hook 'evil-normal-state-entry-hook
                   #'evil-ghostel--normal-state-entry nil t)
