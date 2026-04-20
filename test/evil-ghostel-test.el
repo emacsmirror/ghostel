@@ -63,21 +63,26 @@ Uses mocks for native functions."
   "Test that `evil-ghostel-mode' activates correctly."
   (evil-ghostel-test--with-evil-buffer
    (should evil-ghostel-mode)
-   (should (memq 'evil-ghostel--normal-state-entry
-                 evil-normal-state-entry-hook))
    (should (memq 'evil-ghostel--insert-state-entry
                  evil-insert-state-entry-hook))
    (should (advice--p (advice--symbol-function 'evil-insert-line)))
    (should (advice--p (advice--symbol-function 'ghostel--redraw)))
    (should (advice--p (advice--symbol-function 'ghostel--set-cursor-style)))))
 
+(ert-deftest evil-ghostel-test-mode-activation-no-normal-entry-hook ()
+  "`evil-ghostel-mode' does not install a `normal-state-entry-hook'.
+Point is synced on entry to `emacs'/`insert' and preserved through
+redraws in `normal'; re-syncing on every normal-state entry would
+overwrite the position evil assigns at operator/visual completion."
+  (evil-ghostel-test--with-evil-buffer
+   (should-not (memq 'evil-ghostel--normal-state-entry
+                     evil-normal-state-entry-hook))))
+
 (ert-deftest evil-ghostel-test-mode-deactivation ()
   "Test that `evil-ghostel-mode' cleans up on deactivation."
   (evil-ghostel-test--with-evil-buffer
    (evil-ghostel-mode -1)
    (should-not evil-ghostel-mode)
-   (should-not (memq 'evil-ghostel--normal-state-entry
-                     evil-normal-state-entry-hook))
    (should-not (memq 'evil-ghostel--insert-state-entry
                      evil-insert-state-entry-hook))))
 

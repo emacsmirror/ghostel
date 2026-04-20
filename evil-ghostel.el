@@ -144,11 +144,6 @@ In alt-screen mode, defer to the terminal's cursor style."
   "When non-nil, skip arrow-key sync in the insert-state-entry hook.
 Set by the `I'/`A' advice which send Home/End directly.")
 
-(defun evil-ghostel--normal-state-entry ()
-  "Snap Emacs point to the terminal cursor when entering normal state."
-  (when (and (derived-mode-p 'ghostel-mode) (evil-ghostel--active-p))
-    (evil-ghostel--reset-cursor-point)))
-
 (defun evil-ghostel--insert-state-entry ()
   "Sync terminal cursor to Emacs point when entering `emacs-state'.
 Skipped when `evil-ghostel--sync-inhibit' is set (by I/A advice
@@ -364,8 +359,6 @@ state transitions."
   (if evil-ghostel-mode
       (progn
         (evil-ghostel--escape-stay)
-        (add-hook 'evil-normal-state-entry-hook
-                  #'evil-ghostel--normal-state-entry nil t)
         (add-hook 'evil-insert-state-entry-hook
                   #'evil-ghostel--insert-state-entry nil t)
         ;; Reuse the insert-state sync when entering emacs-state — both
@@ -385,8 +378,6 @@ state transitions."
         (advice-add 'ghostel--set-cursor-style :around
                     #'evil-ghostel--override-cursor-style)
         (evil-refresh-cursor))
-    (remove-hook 'evil-normal-state-entry-hook
-                 #'evil-ghostel--normal-state-entry t)
     (remove-hook 'evil-insert-state-entry-hook
                  #'evil-ghostel--insert-state-entry t)
     (remove-hook 'evil-emacs-state-entry-hook
