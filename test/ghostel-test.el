@@ -161,6 +161,28 @@ succeeds."
 ;; Test: erase sequences
 ;; -----------------------------------------------------------------------
 
+(ert-deftest ghostel-test-redraw-preserves-mark ()
+  "`ghostel--redraw' must keep `mark' stable across the destructive ops.
+Full redraws call `eraseBuffer' and partial redraws `deleteRegion',
+either of which would snap every marker in the buffer to `point-min'."
+  (let ((buf (generate-new-buffer " *ghostel-test-mark*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 40 1000))
+                 (inhibit-read-only t))
+            (ghostel--write-input term "line one\r\nline two\r\nline three")
+            (ghostel--redraw term t)
+            ;; Anchor mark to "two" so its position sits well past point-min.
+            (goto-char (point-min))
+            (search-forward "two")
+            (let ((target (point)))
+              (set-marker (mark-marker) target)
+              ;; Trigger a full redraw (erase-buffer path).
+              (ghostel--write-input term " more")
+              (ghostel--redraw term t)
+              (should (= target (marker-position (mark-marker)))))))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-erase ()
   "Test CSI erase sequences."
   (let ((term (ghostel--new 25 80 1000)))

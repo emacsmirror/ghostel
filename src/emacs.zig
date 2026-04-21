@@ -228,6 +228,18 @@ pub const Env = struct {
         return self.call0(sym.@"point-max");
     }
 
+    pub fn markMarker(self: Env) Value {
+        return self.call0(sym.@"mark-marker");
+    }
+
+    pub fn markerPosition(self: Env, marker: Value) Value {
+        return self.call1(sym.@"marker-position", marker);
+    }
+
+    pub fn setMarker(self: Env, marker: Value, pos: Value) Value {
+        return self.call2(sym.@"set-marker", marker, pos);
+    }
+
     pub fn deleteRegion(self: Env, start: Value, end: Value) void {
         _ = self.call2(sym.@"delete-region", start, end);
     }
@@ -291,6 +303,9 @@ pub const Sym = struct {
     @"point-max": Value,
     @"delete-region": Value,
     @"char-before": Value,
+    @"mark-marker": Value,
+    @"marker-position": Value,
+    @"set-marker": Value,
 
     // Text property names
     face: Value,

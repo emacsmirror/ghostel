@@ -899,6 +899,27 @@ fn positionCursorByCell(env: emacs.Env, term: *Terminal, cx: u16, cy: u16) bool 
 /// When `force_full` is true, the viewport region is fully re-rendered
 /// instead of using the incremental dirty-row path.
 pub fn redraw(env: emacs.Env, term: *Terminal, force_full_arg: bool) void {
+    // Snapshot the buffer's mark across the destructive ops below.  Both
+    // paths — full (eraseBuffer / deleteRegion over the viewport) and
+    // partial (per-row deleteRegion + insert) — move every marker in the
+    // buffer by standard Emacs marker rules.  Point is owned by the
+    // renderer and is placed at the TUI cursor on exit, but mark is user
+    // state (C-SPC, region commands) and must survive the redraw.  Other
+    // markers (e.g. evil's visual-beginning/end) remain the caller's
+    // responsibility to preserve in elisp.
+    const saved_mark: ?i64 = blk: {
+        const pos = env.markerPosition(env.markMarker());
+        if (!env.isNotNil(pos)) break :blk null;
+        break :blk env.extractInteger(pos);
+    };
+    defer {
+        if (saved_mark) |pos| {
+            const pmax = env.extractInteger(env.pointMax());
+            const clamped: i64 = if (pos > pmax) pmax else pos;
+            _ = env.setMarker(env.markMarker(), env.makeInteger(clamped));
+        }
+    }
+
     var force_full = force_full_arg;
 
     // Lock the libghostty viewport to the bottom. Users navigate history
