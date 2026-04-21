@@ -102,24 +102,42 @@ placement math the native module performs in `src/render.zig'."
             ((< dx 0) (dotimes (_ (abs dx)) (ghostel--send-encoded "left" "")))))))
 
 ;; ---------------------------------------------------------------------------
-;; Redraw: preserve point in normal state
+;; Redraw: preserve point and evil visual markers across the native call
 ;; ---------------------------------------------------------------------------
 
 (defun evil-ghostel--around-redraw (orig-fn term &optional full)
-  "Preserve Emacs point during redraws in evil normal state.
+  "Preserve point and evil visual markers across the native redraw call.
+Native `ghostel--redraw' in `src/render.zig' rewrites the viewport
+region, moving every marker in the buffer.  `point' (non-terminal
+states) and the evil-specific visual range markers are restored here;
+`mark' is preserved by the native module itself and needs no handling
+at this layer.
+
+  - `point' in non-terminal states.  In `insert' and `emacs' point
+    intentionally follows the TUI cursor.
+  - `evil-visual-beginning' and `evil-visual-end' in `visual' state.
+
 ORIG-FN is the advised `ghostel--redraw' called with TERM and FULL.
-Without this, the ~30fps redraw timer would snap point back to
-the terminal cursor, undoing any evil `normal-mode' navigation.
-`emacs-state' is evil's vanilla-Emacs escape hatch; point should
-follow the terminal cursor there just like it does in insert-state,
-otherwise the cursor gets stuck wherever it was on state entry while
-the TUI keeps redrawing elsewhere."
+Skipped when the terminal is in alt-screen mode (1049); apps there
+own the screen and drive their own redraw cycle."
   (if (and evil-ghostel-mode
-           (not (memq evil-state '(insert emacs)))
            (not (ghostel--mode-enabled term 1049)))
-      (let ((saved-point (point)))
+      (let* ((preserve-point (not (memq evil-state '(insert emacs))))
+             (visual-p (eq evil-state 'visual))
+             (saved-point (and preserve-point (point)))
+             (saved-vb (and visual-p (bound-and-true-p evil-visual-beginning)
+                            (marker-position evil-visual-beginning)))
+             (saved-ve (and visual-p (bound-and-true-p evil-visual-end)
+                            (marker-position evil-visual-end))))
         (funcall orig-fn term full)
-        (goto-char (min saved-point (point-max))))
+        (when preserve-point
+          (goto-char (min saved-point (point-max))))
+        (when visual-p
+          (let ((pmax (point-max)))
+            (when saved-vb
+              (set-marker evil-visual-beginning (min saved-vb pmax)))
+            (when saved-ve
+              (set-marker evil-visual-end (min saved-ve pmax))))))
     (funcall orig-fn term full)))
 
 ;; ---------------------------------------------------------------------------

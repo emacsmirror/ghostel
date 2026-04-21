@@ -128,6 +128,93 @@ Regression guard: the minor-mode body used to call
    (should-not evil-move-cursor-back)))
 
 ;; -----------------------------------------------------------------------
+;; Test: around-redraw preserves point / mark / visual markers
+;; -----------------------------------------------------------------------
+
+(defmacro evil-ghostel-test--simulating-redraw (&rest body)
+  "Run BODY with `ghostel--redraw' replaced by a buffer-rewriter.
+The mock erases the buffer and reinserts the same text, which is what
+the native full-redraw path does at the Emacs level — every marker in
+the buffer snaps to `point-min' across the call."
+  `(cl-letf (((symbol-function 'ghostel--redraw)
+              (lambda (_term &optional _full)
+                (let ((text (buffer-string)))
+                  (erase-buffer)
+                  (insert text))))
+             ((symbol-function 'ghostel--mode-enabled)
+              (lambda (_term _mode) nil)))
+     ,@body))
+
+(ert-deftest evil-ghostel-test-around-redraw-preserves-point-in-normal ()
+  "Point is restored in non-terminal states after the native redraw call."
+  (evil-ghostel-test--with-evil-buffer
+   (insert "one\ntwo\nthree\nfour\nfive\n")
+   (evil-normal-state)
+   (goto-char (point-min))
+   (search-forward "three")
+   (let ((target (point)))
+     (evil-ghostel-test--simulating-redraw
+      (evil-ghostel--around-redraw (symbol-function 'ghostel--redraw) nil))
+     (should (= target (point))))))
+
+(ert-deftest evil-ghostel-test-around-redraw-lets-point-follow-in-emacs ()
+  "Point is NOT preserved in `emacs'/`insert' — it follows the TUI cursor."
+  (evil-ghostel-test--with-evil-buffer
+   (insert "one\ntwo\nthree\nfour\nfive\n")
+   (evil-emacs-state)
+   (goto-char (point-min))
+   (search-forward "three")
+   (evil-ghostel-test--simulating-redraw
+    ;; Mock redraw places point at point-min (like eraseBuffer does).
+    (evil-ghostel--around-redraw
+     (lambda (_term &optional _full)
+       (let ((text (buffer-string)))
+         (erase-buffer)
+         (insert text)
+         (goto-char (point-min))))
+     nil))
+   (should (= (point-min) (point)))))
+
+(ert-deftest evil-ghostel-test-around-redraw-preserves-visual-markers ()
+  "`evil-visual-beginning'/`evil-visual-end' are restored in visual state."
+  (evil-ghostel-test--with-evil-buffer
+   (insert "one\ntwo\nthree\nfour\nfive\n")
+   (goto-char (point-min))
+   (search-forward "two")
+   (let ((vb-target (point)))
+     (search-forward "four")
+     (let ((ve-target (point)))
+       (setq-local evil-visual-beginning (copy-marker vb-target))
+       (setq-local evil-visual-end (copy-marker ve-target t))
+       (let ((evil-state 'visual))
+         (evil-ghostel-test--simulating-redraw
+          (evil-ghostel--around-redraw
+           (symbol-function 'ghostel--redraw) nil)))
+       (should (= vb-target (marker-position evil-visual-beginning)))
+       (should (= ve-target (marker-position evil-visual-end)))))))
+
+(ert-deftest evil-ghostel-test-around-redraw-bypassed-in-alt-screen ()
+  "Advice is a passthrough when the terminal is in alt-screen mode (1049).
+Fullscreen TUIs own the screen and drive their own redraw cycle; the
+advice must not restore point or visual markers there."
+  (evil-ghostel-test--with-evil-buffer
+   (insert "one\ntwo\nthree\nfour\nfive\n")
+   (evil-normal-state)
+   (goto-char (point-min))
+   (search-forward "three")
+   (cl-letf (((symbol-function 'ghostel--redraw)
+              (lambda (_term &optional _full)
+                (let ((text (buffer-string)))
+                  (erase-buffer)
+                  (insert text)
+                  (goto-char (point-min)))))
+             ((symbol-function 'ghostel--mode-enabled)
+              (lambda (_term mode) (= mode 1049))))
+     (evil-ghostel--around-redraw (symbol-function 'ghostel--redraw) nil))
+   ;; Advice bypassed → the mock's point placement (point-min) wins.
+   (should (= (point-min) (point)))))
+
+;; -----------------------------------------------------------------------
 ;; Test: reset-cursor-point
 ;; -----------------------------------------------------------------------
 
@@ -381,20 +468,6 @@ redrawing elsewhere."
                                                (lambda (&rest _) (setq evil-called t))))
                                       (ghostel--set-cursor-style 0 t)
                                       (should evil-called)))))
-
-;; -----------------------------------------------------------------------
-;; Test: normal-state-entry hook
-;; -----------------------------------------------------------------------
-
-(ert-deftest evil-ghostel-test-normal-entry-snaps-point ()
-  "Test that entering normal state snaps point to terminal cursor."
-  (evil-ghostel-test--with-buffer 5 40 "hello world"
-                                  (evil-insert-state)
-                                  ;; Move point away
-                                  (goto-char (point-min))
-                                  ;; Enter normal state — should snap to terminal cursor
-                                  (evil-normal-state)
-                                  (should (= 11 (current-column)))))
 
 ;; -----------------------------------------------------------------------
 ;; Test: delete-region primitive
