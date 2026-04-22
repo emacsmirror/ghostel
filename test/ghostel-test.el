@@ -1031,6 +1031,69 @@ Mirrors the real zsh case where the directory still contains a
       (kill-buffer buf))))
 
 ;; -----------------------------------------------------------------------
+;; Test: fish auto-inject shim
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-fish-auto-inject-loads-integration ()
+  "Fish auto-inject shim must chain to etc/ghostel.fish and clean XDG_DATA_DIRS.
+Regression test: the vendor_conf.d shim previously (a) inlined a
+partial copy of the integration and silently dropped the outbound
+\\='ssh' wrapper, and (b) used a temp variable name (\\='xdg_data_dirs')
+that collided with a fish-internal local variable, leaking
+\\='/fish'-suffixed paths back to exported XDG_DATA_DIRS."
+  :tags '(:fish)
+  (skip-unless (executable-find "fish"))
+  (let* ((ghostel-dir (file-name-directory
+                       (or (locate-library "ghostel")
+                           load-file-name
+                           buffer-file-name)))
+         (integ-dir (directory-file-name
+                     (expand-file-name "etc/shell-integration" ghostel-dir)))
+         ;; Isolate from the dev's fish config: a user `function ssh' or
+         ;; pre-defined ghostel-like helpers would otherwise satisfy the
+         ;; assertions even if our shim didn't chain to etc/ghostel.fish.
+         ;; Pointing HOME and XDG_CONFIG_HOME at an empty temp dir skips
+         ;; config.fish, conf.d/, and functions/ autoload without
+         ;; disturbing XDG_DATA_DIRS (so vendor_conf.d still loads).
+         (fish-home (make-temp-file "ghostel-test-fish-home-" t)))
+    (unwind-protect
+        (let* ((probe (concat
+                       "functions -q __ghostel_osc7; and echo osc7=yes; or echo osc7=no\n"
+                       "functions -q ghostel_cmd; and echo cmd=yes; or echo cmd=no\n"
+                       "functions -q ssh; and echo ssh=yes; or echo ssh=no\n"
+                       "echo xdg=$XDG_DATA_DIRS\n"))
+               (process-environment
+                (append (list (format "HOME=%s" fish-home)
+                              (format "XDG_CONFIG_HOME=%s" fish-home)
+                              (format "EMACS_GHOSTEL_PATH=%s" ghostel-dir)
+                              "GHOSTEL_SSH_INSTALL_TERMINFO=1"
+                              (format "XDG_DATA_DIRS=%s:/usr/local/share:/usr/share"
+                                      integ-dir)
+                              (format "GHOSTEL_SHELL_INTEGRATION_XDG_DIR=%s"
+                                      integ-dir))
+                        process-environment))
+               ;; `call-process' inherits `default-directory' as the cwd.
+               ;; Avoid a path with tildes — `~' would expand against the
+               ;; overridden HOME above and point at a missing subdir.
+               (default-directory fish-home)
+               (output (with-temp-buffer
+                         (call-process "fish" nil (current-buffer) nil
+                                       "-i" "-c" probe)
+                         (buffer-string))))
+          ;; Shim must chain to etc/ghostel.fish so the integration loads.
+          (should (string-match-p "^osc7=yes$" output))
+          (should (string-match-p "^cmd=yes$" output))
+          ;; GHOSTEL_SSH_INSTALL_TERMINFO=1 must reach etc/ghostel.fish so
+          ;; the ssh install-and-cache wrapper is defined.
+          (should (string-match-p "^ssh=yes$" output))
+          ;; XDG cleanup must strip the injected integration dir without
+          ;; leaking fish's internal `/fish'-suffixed form.
+          (should (string-match "^xdg=\\(.*\\)$" output))
+          (should-not (string-match-p (regexp-quote integ-dir)
+                                      (match-string 1 output))))
+      (delete-directory fish-home t))))
+
+;; -----------------------------------------------------------------------
 ;; Test: update-directory
 ;; -----------------------------------------------------------------------
 
@@ -6958,6 +7021,7 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-local-host-p
     ghostel-test-update-directory-remote
     ghostel-test-get-shell-local
+    ghostel-test-fish-auto-inject-loads-integration
     ghostel-test-resize-window-adjust
     ghostel-test-resize-nil-size
     ghostel-test-resize-noop-same-dims
