@@ -89,7 +89,7 @@ manually:
 ## Building from source
 
 Building is only needed if you don't want to use the pre-built binaries.
-Ghostel vendors a generated `include/emacs-module.h`, so normal builds do not
+Ghostel vendors a generated `vendor/emacs-module.h`, so normal builds do not
 require local Emacs headers.  If you want to override the vendored header, set
 `EMACS_INCLUDE_DIR` to a directory containing `emacs-module.h`, or set
 `EMACS_BIN_DIR` to an Emacs `bin/` directory and Ghostel will look for
@@ -125,7 +125,7 @@ Alternatively, download a **pre-built binary** via `M-x ghostel-download-module`
 (or `C-u M-x ghostel-download-module` to pick a specific release).
 
 The compiled `xterm-ghostty` terminfo entry ships pre-built in
-`terminfo/` and is identical to what `tic` would produce locally —
+`etc/terminfo/` and is identical to what `tic` would produce locally —
 no build step needed, and the file format is portable across BSD
 and ncurses systems.  Maintainers regenerate it via `make
 regen-terminfo` after bumping libghostty.
@@ -144,17 +144,17 @@ This is controlled by `ghostel-shell-integration` (default `t`).  Set it to
 
 **bash** — add to `~/.bashrc`:
 ```bash
-[[ "$INSIDE_EMACS" = 'ghostel' ]] && source "$EMACS_GHOSTEL_PATH/etc/ghostel.bash"
+[[ "$INSIDE_EMACS" = 'ghostel' ]] && source "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.bash"
 ```
 
 **zsh** — add to `~/.zshrc`:
 ```zsh
-[[ "$INSIDE_EMACS" = 'ghostel' ]] && source "$EMACS_GHOSTEL_PATH/etc/ghostel.zsh"
+[[ "$INSIDE_EMACS" = 'ghostel' ]] && source "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.zsh"
 ```
 
 **fish** — add to `~/.config/fish/config.fish`:
 ```fish
-test "$INSIDE_EMACS" = 'ghostel'; and source "$EMACS_GHOSTEL_PATH/etc/ghostel.fish"
+test "$INSIDE_EMACS" = 'ghostel'; and source "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.fish"
 ```
 </details>
 
@@ -298,8 +298,8 @@ the terminal exits).  You can also enable it for specific shells only:
 
 **Option 2: Manual setup** (recommended for permanent remote hosts)
 
-Copy the integration scripts from ghostel's `etc/` directory to each
-remote host (e.g. `~/.local/share/ghostel/`) and source them from
+Copy the integration scripts from ghostel's `etc/shell/` directory to
+each remote host (e.g. `~/.local/share/ghostel/`) and source them from
 your shell configuration:
 
 **bash** — add to `~/.bashrc` on the remote host:
@@ -413,11 +413,11 @@ infocmp -x xterm-ghostty | ssh REMOTE 'mkdir -p ~/.terminfo && tic -x -'
 Or copy the bundled compiled binary from the package directory:
 ```bash
 ssh REMOTE 'mkdir -p ~/.terminfo/x'
-scp <package-dir>/terminfo/x/xterm-ghostty REMOTE:~/.terminfo/x/
+scp <package-dir>/etc/terminfo/x/xterm-ghostty REMOTE:~/.terminfo/x/
 # Ghostty also looks in 78/ on macOS:
 ssh REMOTE 'uname' | grep -q Darwin && {
     ssh REMOTE 'mkdir -p ~/.terminfo/78'
-    scp <package-dir>/terminfo/78/xterm-ghostty REMOTE:~/.terminfo/78/
+    scp <package-dir>/etc/terminfo/78/xterm-ghostty REMOTE:~/.terminfo/78/
 }
 ```
 
@@ -590,10 +590,24 @@ It synchronizes the terminal cursor with Emacs point during evil state
 transitions so that normal-mode navigation (`hjkl` etc.) works
 correctly.
 
-To enable:
+`evil-ghostel` is distributed as an independent MELPA package that
+depends on `ghostel`.  Install it alongside ghostel:
 
 ```elisp
 (use-package evil-ghostel
+  :ensure t
+  :after (ghostel evil)
+  :hook (ghostel-mode . evil-ghostel-mode))
+```
+
+Or from source (Emacs 30+); `:lisp-dir` points package-vc at this
+extension's subdirectory inside the ghostel monorepo:
+
+```elisp
+(use-package evil-ghostel
+  :vc (:url "https://github.com/dakra/ghostel"
+       :lisp-dir "extensions/evil-ghostel"
+       :rev :newest)
   :after (ghostel evil)
   :hook (ghostel-mode . evil-ghostel-mode))
 ```

@@ -1,8 +1,6 @@
 ;;; ghostel-eshell.el --- Eshell integration for ghostel -*- lexical-binding: t; -*-
 
 ;; Author: Daniel Kraus <daniel@kraus.my>
-;; Keywords: processes, tools, convenience
-;; Package-Requires: ((emacs "28.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:

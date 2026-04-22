@@ -62,7 +62,7 @@
 ;;   Directory tracking (OSC 7), prompt navigation (OSC 133), and the
 ;;   `ghostel_cmd' helper are auto-injected for bash, zsh, and fish —
 ;;   no shell rc changes needed.  Controlled by `ghostel-shell-integration'
-;;   (default t); set it to nil to source etc/ghostel.{bash,zsh,fish}
+;;   (default t); set it to nil to source etc/shell/ghostel.{bash,zsh,fish}
 ;;   manually instead.
 ;;
 ;; Native module:
@@ -100,7 +100,7 @@
   :type 'string)
 
 (defcustom ghostel-term "xterm-ghostty"
-  "Value of `TERM' for ghostel processes.
+  "Value of the TERM environment variable for ghostel processes.
 
 The default \"xterm-ghostty\" advertises ghostel's capability set via
 the bundled terminfo entry: synchronized output (DEC 2026), Kitty
@@ -695,14 +695,36 @@ Choice: " url)
                 (kill-buffer buf))))))
     (error nil)))
 
+(defun ghostel--package-directory ()
+  "Return the directory ghostel is loaded from, or nil."
+  (let ((src (or (locate-library "ghostel")
+                 load-file-name buffer-file-name)))
+    (and src (file-name-directory src))))
+
+(defun ghostel--resource-root ()
+  "Return the root directory holding shipped resources (etc/, vendor/).
+Prefers whichever layout is actually on disk:
+- dev / `package-vc-install': ghostel.el lives under `lisp/', so the
+  resource root is the parent of the Lisp directory.
+- MELPA-style flat install: `:files' flattens sources into the
+  package root, so the resource root equals the Lisp directory.
+Falls back to the Lisp directory itself when neither layout is
+detectable (e.g. a standalone ghostel.el on `load-path' without the
+shipped resources), so callers always get a sensible
+`default-directory' to work in."
+  (when-let* ((lisp-dir (ghostel--package-directory)))
+    (or (and (file-directory-p (expand-file-name "etc" lisp-dir)) lisp-dir)
+        (let ((parent (file-name-as-directory
+                       (expand-file-name ".." lisp-dir))))
+          (and (file-directory-p (expand-file-name "etc" parent)) parent))
+        lisp-dir)))
+
 (defun ghostel-download-module (&optional prompt-for-version)
   "Interactively download the pre-built native module for this platform.
 With PROMPT-FOR-VERSION, prompt for a release tag to download.
 Leaving the prompt empty downloads the latest release."
   (interactive "P")
-  (let* ((dir (file-name-directory (or load-file-name
-                                       (locate-library "ghostel")
-                                       buffer-file-name)))
+  (let* ((dir (ghostel--resource-root))
          (mod (expand-file-name
                (concat "ghostel-module" module-file-suffix) dir))
          (version (when prompt-for-version
@@ -721,8 +743,7 @@ Leaving the prompt empty downloads the latest release."
   "Compile the ghostel native module by running zig build.
 The output is shown in a *ghostel-build* compilation buffer."
   (interactive)
-  (let ((default-directory (file-name-directory (or (locate-library "ghostel")
-                                                    default-directory))))
+  (let ((default-directory (ghostel--resource-root)))
     (compile "zig build -Doptimize=ReleaseFast -Dcpu=baseline" t)))
 
 
@@ -755,9 +776,7 @@ covers the pure-Elisp test path where `cl-letf' stubs the native
 entry points so tests run without the module present."
   (unless (or (featurep 'ghostel-module)
               (fboundp 'ghostel--new))
-    (let* ((dir (file-name-directory (or load-file-name
-                                         (locate-library "ghostel")
-                                         buffer-file-name)))
+    (let* ((dir (ghostel--resource-root))
            (mod (expand-file-name
                  (concat "ghostel-module" module-file-suffix) dir)))
       (unless (or (file-exists-p mod) noninteractive)
@@ -2553,14 +2572,11 @@ Returns a plist (:env :args :stty :temp-files :temp-dirs) for
 Returns nil on failure."
   (condition-case err
       (let* ((remote-prefix (file-remote-p default-directory))
-             (ghostel-dir (file-name-directory
-                           (or (locate-library "ghostel")
-                               load-file-name buffer-file-name
-                               default-directory)))
+             (ghostel-dir (ghostel--resource-root))
              (ext (symbol-name shell-type))
              (integration (ghostel--read-local-file
                            (expand-file-name
-                            (format "etc/ghostel.%s" ext) ghostel-dir)))
+                            (format "etc/shell/ghostel.%s" ext) ghostel-dir)))
              (tinfo (and (ghostel--ssh-install-enabled-p)
                          (ghostel--push-remote-terminfo remote-prefix)))
              (base (pcase shell-type
@@ -2639,19 +2655,13 @@ Returns nil on failure."
   "Non-nil after a warning about missing bundled terminfo has been issued.
 Suppresses repeat warnings on every spawn.")
 
-(defun ghostel--package-directory ()
-  "Return the directory ghostel is loaded from, or nil."
-  (let ((src (or (locate-library "ghostel")
-                 load-file-name buffer-file-name)))
-    (and src (file-name-directory src))))
-
 (defun ghostel--terminfo-directory ()
-  "Return absolute path to bundled `terminfo/' directory if usable.
+  "Return absolute path to bundled `etc/terminfo/' directory if usable.
 Usable means a compiled xterm-ghostty entry exists in either the
 macOS hashed-dir layout (78/xterm-ghostty) or the Linux layout
 \(x/xterm-ghostty).  Returns nil if missing."
-  (let* ((pkg (ghostel--package-directory))
-         (dir (and pkg (expand-file-name "terminfo" pkg))))
+  (let* ((root (ghostel--resource-root))
+         (dir (and root (expand-file-name "etc/terminfo" root))))
     (and dir
          (file-directory-p dir)
          (or (file-readable-p (expand-file-name "78/xterm-ghostty" dir))
@@ -2804,10 +2814,7 @@ on the remote host."
          (width (max 1 (window-max-chars-per-line)))
          (remote-p (file-remote-p default-directory))
          (shell (ghostel--get-shell))
-         (ghostel-dir (file-name-directory
-                       (or (locate-library "ghostel")
-                           load-file-name buffer-file-name
-                           default-directory)))
+         (ghostel-dir (ghostel--resource-root))
          ;; Detect shell type when integration is enabled.
          ;; For remote, also check ghostel-tramp-shell-integration.
          (shell-type (and ghostel-shell-integration
@@ -2830,7 +2837,7 @@ on the remote host."
                  (pcase shell-type
                    ('bash
                     (let ((inject-script (expand-file-name
-                                          "etc/shell-integration/bash/ghostel-inject.bash"
+                                          "etc/shell/bootstrap/bash/inject.bash"
                                           ghostel-dir))
                           (env (list "GHOSTEL_BASH_INJECT=1")))
                       (when (file-readable-p inject-script)
@@ -2846,7 +2853,7 @@ on the remote host."
                         env)))
                    ('zsh
                     (let ((zsh-dir (expand-file-name
-                                    "etc/shell-integration/zsh" ghostel-dir)))
+                                    "etc/shell/bootstrap/zsh" ghostel-dir)))
                       (when (file-directory-p zsh-dir)
                         (let ((env nil)
                               (old-zdotdir (getenv "ZDOTDIR")))
@@ -2856,7 +2863,7 @@ on the remote host."
                           env))))
                    ('fish
                     (let ((integ-dir (expand-file-name
-                                      "etc/shell-integration" ghostel-dir)))
+                                      "etc/shell/bootstrap" ghostel-dir)))
                       (when (file-directory-p integ-dir)
                         (let ((xdg (or (getenv "XDG_DATA_DIRS")
                                        "/usr/local/share:/usr/share")))
@@ -2986,7 +2993,7 @@ position COL columns into the first matched line."
         ;; Step past it so `forward-line' counts only content rows, not
         ;; the phantom empty line that would otherwise push the viewport
         ;; one line too deep and clip the bottom row.
-        (when (and (> (point) (point-min))
+        (when (and (not (bobp))
                    (eq (char-before) ?\n))
           (forward-char -1))
         (forward-line (- (1- tr)))

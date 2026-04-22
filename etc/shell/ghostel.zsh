@@ -1,6 +1,6 @@
 # Ghostel shell integration for zsh
 # Source this from your .zshrc:
-#   [[ "$INSIDE_EMACS" = 'ghostel' ]] && source /path/to/ghostel/etc/ghostel.zsh
+#   [[ "$INSIDE_EMACS" = 'ghostel' ]] && source /path/to/ghostel/etc/shell/ghostel.zsh
 
 # Idempotency guard — skip if already loaded (e.g. auto-injected).
 (( $+functions[__ghostel_osc7] )) && return

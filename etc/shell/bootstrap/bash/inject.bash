@@ -55,6 +55,6 @@ if [ -n "$GHOSTEL_BASH_INJECT" ]; then
 fi
 
 # Load ghostel integration (with idempotency guard).
-if [[ -n "$EMACS_GHOSTEL_PATH" && -r "$EMACS_GHOSTEL_PATH/etc/ghostel.bash" ]]; then
-  builtin source "$EMACS_GHOSTEL_PATH/etc/ghostel.bash"
+if [[ -n "$EMACS_GHOSTEL_PATH" && -r "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.bash" ]]; then
+  builtin source "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.bash"
 fi

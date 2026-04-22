@@ -1,6 +1,6 @@
 # Ghostel shell integration for fish
 # Source this from your config.fish:
-#   test "$INSIDE_EMACS" = 'ghostel'; and source /path/to/ghostel/etc/ghostel.fish
+#   test "$INSIDE_EMACS" = 'ghostel'; and source /path/to/ghostel/etc/shell/ghostel.fish
 
 # Idempotency guard — skip if already loaded (e.g. auto-injected).
 functions -q __ghostel_osc7; and return

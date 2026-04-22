@@ -1,8 +1,6 @@
 ;;; ghostel-compile.el --- Compilation integration for ghostel -*- lexical-binding: t; -*-
 
 ;; Author: Daniel Kraus <daniel@kraus.my>
-;; Keywords: processes, tools, convenience
-;; Package-Requires: ((emacs "28.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
@@ -59,6 +57,9 @@
 (require 'compile)
 
 (declare-function ghostel--cursor-position "ghostel-module" (term))
+(declare-function ghostel--new "ghostel-module")
+(declare-function ghostel--set-size "ghostel-module")
+(declare-function ghostel--write-input "ghostel-module")
 
 
 ;;; Customization
@@ -278,7 +279,7 @@ separator line — matching `M-x compile's output format."
   (save-excursion
     (goto-char (point-max))
     (skip-chars-backward " \t\n" start)
-    (when (< (point) (point-max))
+    (when (not (eobp))
       (delete-region (point) (point-max))
       (insert "\n"))))
 
@@ -367,7 +368,7 @@ same as in any compilation buffer."
               ;; separator line between the last output and the footer
               ;; — matches the `\n\nCompilation finished ...' format
               ;; `M-x compile' uses.
-              (unless (or (= (point) (point-min)) (bolp))
+              (unless (or (bobp) (bolp))
                 (insert "\n"))
               (insert "\n" footer))
             (save-excursion

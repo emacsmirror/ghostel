@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Breaking
+- Repository layout reorganized.  Elisp sources now live under `lisp/`
+  (the `ghostel` package) and `extensions/` (independent `evil-ghostel`
+  package); vendored headers moved from `include/` to `vendor/`; the
+  bundled compiled terminfo moved from `terminfo/` to `etc/terminfo/`;
+  shell-integration assets restructured into `etc/shell/ghostel.{bash,
+  fish,zsh}` (user-sourced rc files) and `etc/shell/bootstrap/` (env-
+  hook shims for local auto-injection).
+- Users who source ghostel's shell rc files manually from their own
+  shell configuration must update the path: `etc/ghostel.{bash,zsh,
+  fish}` → `etc/shell/ghostel.{bash,zsh,fish}`.
+- `evil-ghostel` is now published as a separate MELPA package.  Users
+  who relied on installing `ghostel` alone and getting evil integration
+  for free must now install `evil-ghostel` separately.  In return,
+  `package-vc-install ghostel` no longer pulls `evil` in as a
+  transitive dependency of the single-repo scan.
+- Removed the `ghostel-evil` compatibility shim that was deprecated in
+  0.13.0.  Replace any `(require 'ghostel-evil)` with `(require
+  'evil-ghostel)` and any `ghostel-evil-mode` calls with
+  `evil-ghostel-mode`.
+
 ### Fixed
 - `ghostel` and `ghostel-project` reuse an existing terminal buffer even
   after `ghostel--set-title-default` has renamed it.  Buffers now carry

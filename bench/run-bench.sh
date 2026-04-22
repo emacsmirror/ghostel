@@ -117,7 +117,7 @@ if [ "$INCLUDE_EAT" = "t" ]; then
 fi
 
 # Build load-path
-LOAD_PATH="-L $GHOSTEL_DIR"
+LOAD_PATH="-L $GHOSTEL_DIR/lisp"
 [ "$INCLUDE_VTERM" = "t" ] && LOAD_PATH="$LOAD_PATH -L $VTERM_DIR"
 [ "$INCLUDE_EAT" = "t" ] && LOAD_PATH="$LOAD_PATH -L $EAT_DIR"
 

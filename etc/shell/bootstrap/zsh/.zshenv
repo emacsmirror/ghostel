@@ -15,7 +15,7 @@ fi
     [[ ! -r "$_ghostel_file" ]] || 'builtin' 'source' '--' "$_ghostel_file"
 } always {
     if [[ -o 'interactive' && -n "$EMACS_GHOSTEL_PATH" ]]; then
-        'builtin' 'typeset' _ghostel_integ="$EMACS_GHOSTEL_PATH/etc/ghostel.zsh"
+        'builtin' 'typeset' _ghostel_integ="$EMACS_GHOSTEL_PATH/etc/shell/ghostel.zsh"
         [[ ! -r "$_ghostel_integ" ]] || 'builtin' 'source' '--' "$_ghostel_integ"
         'builtin' 'unset' '_ghostel_integ'
     fi

@@ -1,7 +1,7 @@
 # Ghostel shell integration auto-injection for fish.
 # Auto-loaded via XDG_DATA_DIRS.  Restores XDG_DATA_DIRS and then
-# chains to the real integration in etc/ghostel.fish (single source
-# of truth; also used by manual source and TRAMP).
+# chains to the real integration in etc/shell/ghostel.fish (single
+# source of truth; also used by manual source and TRAMP).
 
 # Restore XDG_DATA_DIRS by removing our injected path.
 # Use a private variable name — fish pre-populates a local-scope
@@ -26,7 +26,7 @@ end
 status --is-interactive; or exit 0
 
 # Load the real integration (idempotent via __ghostel_osc7 guard in
-# etc/ghostel.fish).
-if set -q EMACS_GHOSTEL_PATH; and test -r "$EMACS_GHOSTEL_PATH/etc/ghostel.fish"
-    source "$EMACS_GHOSTEL_PATH/etc/ghostel.fish"
+# etc/shell/ghostel.fish).
+if set -q EMACS_GHOSTEL_PATH; and test -r "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.fish"
+    source "$EMACS_GHOSTEL_PATH/etc/shell/ghostel.fish"
 end

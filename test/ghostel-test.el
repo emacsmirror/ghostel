@@ -1035,7 +1035,7 @@ Mirrors the real zsh case where the directory still contains a
 ;; -----------------------------------------------------------------------
 
 (ert-deftest ghostel-test-fish-auto-inject-loads-integration ()
-  "Fish auto-inject shim must chain to etc/ghostel.fish and clean XDG_DATA_DIRS.
+  "Fish auto-inject shim must chain to etc/shell/ghostel.fish and clean XDG_DATA_DIRS.
 Regression test: the vendor_conf.d shim previously (a) inlined a
 partial copy of the integration and silently dropped the outbound
 \\='ssh' wrapper, and (b) used a temp variable name (\\='xdg_data_dirs')
@@ -1043,15 +1043,16 @@ that collided with a fish-internal local variable, leaking
 \\='/fish'-suffixed paths back to exported XDG_DATA_DIRS."
   :tags '(:fish)
   (skip-unless (executable-find "fish"))
-  (let* ((ghostel-dir (file-name-directory
-                       (or (locate-library "ghostel")
-                           load-file-name
-                           buffer-file-name)))
+  (let* ((ghostel-dir (or (ghostel--resource-root)
+                          (file-name-directory
+                           (or (locate-library "ghostel")
+                               load-file-name
+                               buffer-file-name))))
          (integ-dir (directory-file-name
-                     (expand-file-name "etc/shell-integration" ghostel-dir)))
+                     (expand-file-name "etc/shell/bootstrap" ghostel-dir)))
          ;; Isolate from the dev's fish config: a user `function ssh' or
          ;; pre-defined ghostel-like helpers would otherwise satisfy the
-         ;; assertions even if our shim didn't chain to etc/ghostel.fish.
+         ;; assertions even if our shim didn't chain to etc/shell/ghostel.fish.
          ;; Pointing HOME and XDG_CONFIG_HOME at an empty temp dir skips
          ;; config.fish, conf.d/, and functions/ autoload without
          ;; disturbing XDG_DATA_DIRS (so vendor_conf.d still loads).
@@ -1080,10 +1081,10 @@ that collided with a fish-internal local variable, leaking
                          (call-process "fish" nil (current-buffer) nil
                                        "-i" "-c" probe)
                          (buffer-string))))
-          ;; Shim must chain to etc/ghostel.fish so the integration loads.
+          ;; Shim must chain to etc/shell/ghostel.fish so the integration loads.
           (should (string-match-p "^osc7=yes$" output))
           (should (string-match-p "^cmd=yes$" output))
-          ;; GHOSTEL_SSH_INSTALL_TERMINFO=1 must reach etc/ghostel.fish so
+          ;; GHOSTEL_SSH_INSTALL_TERMINFO=1 must reach etc/shell/ghostel.fish so
           ;; the ssh install-and-cache wrapper is defined.
           (should (string-match-p "^ssh=yes$" output))
           ;; XDG cleanup must strip the injected integration dir without
@@ -2032,8 +2033,7 @@ first real focus event."
     (should (equal "https://example.com/path"              ; url strips trailing dot
                    (get-text-property 5 'help-echo))))
   ;; File:line detection with absolute path
-  (let ((test-file (expand-file-name "ghostel.el"
-                                     (file-name-directory (or load-file-name default-directory)))))
+  (let ((test-file (locate-library "ghostel")))
     (with-temp-buffer
       (insert (format "Error at %s:42 bad" test-file))
       (let ((ghostel-enable-url-detection t))

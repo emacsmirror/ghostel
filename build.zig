@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const vendored_emacs_module_dir = "include";
+const vendored_emacs_module_dir = "vendor";
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});

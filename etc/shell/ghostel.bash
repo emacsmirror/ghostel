@@ -1,6 +1,6 @@
 # Ghostel shell integration for bash
 # Source this from your .bashrc:
-#   [[ "$INSIDE_EMACS" = 'ghostel' ]] && source /path/to/ghostel/etc/ghostel.bash
+#   [[ "$INSIDE_EMACS" = 'ghostel' ]] && source /path/to/ghostel/etc/shell/ghostel.bash
 
 # Idempotency guard — skip if already loaded (e.g. auto-injected).
 [[ "$(type -t __ghostel_osc7)" = "function" ]] && return
