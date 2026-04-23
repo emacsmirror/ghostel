@@ -79,9 +79,9 @@
 
 ;;; Code:
 
+(require 'ansi-color)
 (require 'cl-lib)
 (require 'project)
-(require 'term)
 (require 'text-property-search)
 (require 'tramp)
 (require 'url-parse)
@@ -422,83 +422,67 @@ before sending the input."
 ;;; ANSI color faces
 
 (defface ghostel-color-black
-  '((t :inherit term-color-black))
+  '((t :inherit ansi-color-black))
   "Face used to render black color code.")
 
 (defface ghostel-color-red
-  '((t :inherit term-color-red))
+  '((t :inherit ansi-color-red))
   "Face used to render red color code.")
 
 (defface ghostel-color-green
-  '((t :inherit term-color-green))
+  '((t :inherit ansi-color-green))
   "Face used to render green color code.")
 
 (defface ghostel-color-yellow
-  '((t :inherit term-color-yellow))
+  '((t :inherit ansi-color-yellow))
   "Face used to render yellow color code.")
 
 (defface ghostel-color-blue
-  '((t :inherit term-color-blue))
+  '((t :inherit ansi-color-blue))
   "Face used to render blue color code.")
 
 (defface ghostel-color-magenta
-  '((t :inherit term-color-magenta))
+  '((t :inherit ansi-color-magenta))
   "Face used to render magenta color code.")
 
 (defface ghostel-color-cyan
-  '((t :inherit term-color-cyan))
+  '((t :inherit ansi-color-cyan))
   "Face used to render cyan color code.")
 
 (defface ghostel-color-white
-  '((t :inherit term-color-white))
+  '((t :inherit ansi-color-white))
   "Face used to render white color code.")
 
 (defface ghostel-color-bright-black
-  `((t :inherit ,(if (facep 'term-color-bright-black)
-                     'term-color-bright-black
-                   'term-color-black)))
+  '((t :inherit ansi-color-bright-black))
   "Face used to render bright black color code.")
 
 (defface ghostel-color-bright-red
-  `((t :inherit ,(if (facep 'term-color-bright-red)
-                     'term-color-bright-red
-                   'term-color-red)))
+  '((t :inherit ansi-color-bright-red))
   "Face used to render bright red color code.")
 
 (defface ghostel-color-bright-green
-  `((t :inherit ,(if (facep 'term-color-bright-green)
-                     'term-color-bright-green
-                   'term-color-green)))
+  '((t :inherit ansi-color-bright-green))
   "Face used to render bright green color code.")
 
 (defface ghostel-color-bright-yellow
-  `((t :inherit ,(if (facep 'term-color-bright-yellow)
-                     'term-color-bright-yellow
-                   'term-color-yellow)))
+  '((t :inherit ansi-color-bright-yellow))
   "Face used to render bright yellow color code.")
 
 (defface ghostel-color-bright-blue
-  `((t :inherit ,(if (facep 'term-color-bright-blue)
-                     'term-color-bright-blue
-                   'term-color-blue)))
+  '((t :inherit ansi-color-bright-blue))
   "Face used to render bright blue color code.")
 
 (defface ghostel-color-bright-magenta
-  `((t :inherit ,(if (facep 'term-color-bright-magenta)
-                     'term-color-bright-magenta
-                   'term-color-magenta)))
+  '((t :inherit ansi-color-bright-magenta))
   "Face used to render bright magenta color code.")
 
 (defface ghostel-color-bright-cyan
-  `((t :inherit ,(if (facep 'term-color-bright-cyan)
-                     'term-color-bright-cyan
-                   'term-color-cyan)))
+  '((t :inherit ansi-color-bright-cyan))
   "Face used to render bright cyan color code.")
 
 (defface ghostel-color-bright-white
-  `((t :inherit ,(if (facep 'term-color-bright-white)
-                     'term-color-bright-white
-                   'term-color-white)))
+  '((t :inherit ansi-color-bright-white))
   "Face used to render bright white color code.")
 
 (defvar ghostel-color-palette
