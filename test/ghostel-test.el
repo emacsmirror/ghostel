@@ -1168,15 +1168,38 @@ that collided with a fish-internal local variable, leaking
                                "/"
                              "")
                            url-path))
-         (default-directory default-directory))
+         (default-directory default-directory)
+         list-buffers-directory)
     (ghostel--update-directory dir)
     (should (equal dir default-directory))                 ; plain path
+    (should (equal dir list-buffers-directory))            ; mirrored
     (ghostel--update-directory file-url)
     (should (equal dir default-directory))                 ; file URL
+    (should (equal dir list-buffers-directory))            ; mirrored
     ;; Dedup: same path shouldn't re-trigger
     (let ((old ghostel--last-directory))
       (ghostel--update-directory file-url)
       (should (equal old ghostel--last-directory)))))       ; dedup
+
+;; -----------------------------------------------------------------------
+;; Test: cwd exposed via list-buffers-directory
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-list-buffers-directory ()
+  "Test that `ghostel-mode' exposes cwd via `list-buffers-directory'."
+  (let ((default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (with-temp-buffer
+      (ghostel-mode)
+      (should (equal list-buffers-directory default-directory)))))
+
+(ert-deftest ghostel-test-compile-view-list-buffers-directory ()
+  "Test that `ghostel-compile-view-mode' exposes cwd via `list-buffers-directory'."
+  (let ((default-directory (file-name-as-directory
+                            (expand-file-name temporary-file-directory))))
+    (with-temp-buffer
+      (ghostel-compile-view-mode)
+      (should (equal list-buffers-directory default-directory)))))
 
 ;; -----------------------------------------------------------------------
 ;; Test: OSC 7 end-to-end through libghostty
@@ -7631,6 +7654,8 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-send-event
     ghostel-test-raw-key-modified-specials
     ghostel-test-update-directory
+    ghostel-test-list-buffers-directory
+    ghostel-test-compile-view-list-buffers-directory
     ghostel-test-filter-soft-wraps
     ghostel-test-prompt-navigation
     ghostel-test-sync-theme

@@ -2387,9 +2387,11 @@ file:// URL does not match the local machine, construct a TRAMP path."
         (if (file-remote-p path)
             ;; Trust the shell's report; skip file-directory-p to avoid
             ;; synchronous TRAMP connections on every cd.
-            (setq default-directory (file-name-as-directory path))
+            (setq default-directory (file-name-as-directory path)
+                  list-buffers-directory default-directory)
           (when (file-directory-p path)
-            (setq default-directory (file-name-as-directory path))))))))
+            (setq default-directory (file-name-as-directory path)
+                  list-buffers-directory default-directory)))))))
 
 
 ;;; Palette
@@ -3477,6 +3479,7 @@ window (not when it has just been deselected)."
   (setq-local truncate-lines t)
   (setq-local scroll-conservatively 101)
   (setq-local line-spacing 0)
+  (setq-local list-buffers-directory (expand-file-name default-directory)) ; expose cwd to buffer-menu/ibuffer
   (add-function :after after-focus-change-function #'ghostel--focus-change)
   (add-hook 'window-selection-change-functions #'ghostel--focus-change)
   (add-hook 'window-buffer-change-functions #'ghostel--focus-change)

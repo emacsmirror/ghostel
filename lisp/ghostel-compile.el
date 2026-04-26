@@ -180,7 +180,8 @@ to a ghostel terminal."
   ;; the recorded output on the first JIT-lock pass.  Neutralise unfontify:
   ;; compilation-mode's keywords are applied once via `font-lock-ensure'
   ;; on a finalised, static buffer and don't need to be cleaned up.
-  (setq-local font-lock-unfontify-region-function #'ignore))
+  (setq-local font-lock-unfontify-region-function #'ignore)
+  (setq-local list-buffers-directory (expand-file-name default-directory))) ; expose cwd to buffer-menu/ibuffer
 
 (defun ghostel-compile--format-duration (seconds)
   "Format SECONDS (float) as a compilation-style duration string.
