@@ -25,6 +25,10 @@ jobs:
             platform: aarch64-linux
             suffix: .so
             target: aarch64-linux-gnu
+          - os: ubuntu-latest
+            platform: x86_64-freebsd
+            suffix: .so
+            target: x86_64-freebsd
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

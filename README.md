@@ -30,7 +30,7 @@ process, keymap, and buffer.
 ## Requirements
 
 - Emacs 27.1+ with dynamic module support
-- macOS or Linux
+- macOS, Linux or FreeBSD
 
 The native module is **automatically downloaded** on first use.  Pre-built
 binaries are available for:
@@ -39,6 +39,7 @@ binaries are available for:
 - `x86_64-macos` (Intel Mac)
 - `x86_64-linux`
 - `aarch64-linux`
+- `x86_64-freebsd`
 
 If you prefer to build from source or need a different platform, you'll also need
 [Zig](https://ziglang.org/) 0.15.2+ (see [Building from source](#building-from-source)).
