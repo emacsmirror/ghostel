@@ -7891,6 +7891,29 @@ send, and the coalesce-buffer state."
       (when (get-buffer "*ghostel-debug-keypress*")
         (kill-buffer "*ghostel-debug-keypress*")))))
 
+(ert-deftest ghostel-test-debug-info-environment-section ()
+  "`ghostel-debug-info' renders the Environment section.
+The section shows the spawn env ghostel hands the shell (TERM,
+COLORTERM, INSIDE_EMACS, …) plus pass-through LANG/LC_*."
+  (let ((display-buffer-overriding-action '(display-buffer-no-window))
+        (inhibit-message t)
+        (ghostel--terminfo-warned t))
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-buffer
+            (ghostel-debug-info)
+            (with-current-buffer "*ghostel-debug*"
+              (let ((content (buffer-string)))
+                (should (string-match-p "--- Environment ---" content))
+                (should (string-match-p "Spawn env" content))
+                (should (string-match-p "INSIDE_EMACS=ghostel" content))
+                (should (string-match-p "^  TERM=" content))
+                (should (string-match-p "COLORTERM=" content))
+                (should (string-match-p "Pass-through" content))
+                (should (string-match-p "LANG=" content))))))
+      (when (get-buffer "*ghostel-debug*")
+        (kill-buffer "*ghostel-debug*")))))
+
 
 (defconst ghostel-test--elisp-tests
   '(ghostel-test-focus-window-selection
@@ -8082,7 +8105,8 @@ send, and the coalesce-buffer state."
     ghostel-test-eshell-visual-command-mode-toggles-advice
     ghostel-test-eshell/ghostel-dispatches-to-exec-visual
     ghostel-test-terminfo-directory-finds-bundled
-    ghostel-test-debug-keypress-renders-capture)
+    ghostel-test-debug-keypress-renders-capture
+    ghostel-test-debug-info-environment-section)
   "Tests that require only Elisp (no native module).")
 
 (defun ghostel-test-run-elisp ()

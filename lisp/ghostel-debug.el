@@ -428,6 +428,24 @@ ghostel settings into *ghostel-debug* for pasting into bug reports."
                           (frame-parameter frame 'background-mode)))
           (insert (format "Enabled themes:      %s\n"
                           (or custom-enabled-themes "(none)"))))
+        ;; Environment — what ghostel hands the spawned shell.  Vars from
+        ;; `ghostel--terminal-env' (TERM, COLORTERM, optionally TERMINFO and
+        ;; TERM_PROGRAM), the hard-coded INSIDE_EMACS, and `ghostel-environment'
+        ;; user overrides.  LANG/LC_* are pass-through from Emacs.  The
+        ;; terminfo-warned binding suppresses the missing-terminfo warning so
+        ;; viewing the diagnostic isn't itself a side effect.
+        (insert "\n--- Environment ---\n")
+        (insert "Spawn env (set by ghostel):\n")
+        (let* ((ghostel--terminfo-warned t)
+               (env (append (ghostel--terminal-env)
+                            (list "INSIDE_EMACS=ghostel")
+                            ghostel-environment)))
+          (dolist (entry (sort (copy-sequence env) #'string<))
+            (insert (format "  %s\n" entry))))
+        (insert "Pass-through (from Emacs):\n")
+        (dolist (var '("LANG" "LC_ALL" "LC_CTYPE"))
+          (insert (format "  %s=%s\n" var (or (getenv var) ""))))
+        (insert "(user dotfiles may modify these at runtime)\n")
         ;; Buffer / Process / Window / Terminal — only when in a ghostel buffer.
         ;; Capture buffer-local state into locals first, then insert in `out';
         ;; doing inserts inside `with-current-buffer ghostel-buf' would write
