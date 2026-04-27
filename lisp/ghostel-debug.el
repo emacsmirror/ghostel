@@ -543,7 +543,42 @@ ghostel settings into *ghostel-debug* for pasting into bug reports."
                                     (if timer "pending" "none")))
                     (insert (format "Copy mode:           %s\n"
                                     (if copy "active" "off"))))
-                (insert "Term handle:         nil (no terminal)\n")))))
+                (insert "Term handle:         nil (no terminal)\n"))
+              ;; Size sync — surfaces #192-class bugs.
+              ;; If body-rows ≠ term-rows but cur=recorded body pixels, then
+              ;; Emacs already absorbed the chrome change but ghostel didn't
+              ;; reconcile (a real ghostel bug).  If both differ, the next
+              ;; redisplay will fire `window-{size,configuration}-change-hook'
+              ;; and `--window-adjust-process-window-size' will reconcile.
+              (when (and term (window-live-p win))
+                (insert "\n--- Size sync ---\n")
+                (let* ((cur-body-px (window-body-height win t))
+                       (old-body-px (window-old-body-pixel-height win))
+                       (cur-total-px (window-pixel-height win))
+                       (old-total-px (window-old-pixel-height win))
+                       (screen-lines (with-selected-window win
+                                       (window-screen-lines)))
+                       (body-rows (window-body-height win))
+                       (rows-match (eql body-rows term-rows))
+                       (px-match (eql cur-body-px old-body-px)))
+                  (insert (format "Body rows:           %d (window) vs %s (term) %s\n"
+                                  body-rows term-rows
+                                  (if rows-match "[in sync]" "[MISMATCH]")))
+                  (insert (format "window-screen-lines: %s\n" screen-lines))
+                  (insert (format "Body pixels:         cur=%d  recorded=%d %s\n"
+                                  cur-body-px old-body-px
+                                  (if px-match "" "[redisplay pending]")))
+                  (insert (format "Window pixels:       cur=%d  recorded=%d\n"
+                                  cur-total-px old-total-px))
+                  (cond
+                   (rows-match
+                    (insert "Diagnosis:           in sync\n"))
+                   (px-match
+                    (insert "Diagnosis:           Emacs absorbed the chrome change\n")
+                    (insert "                     but ghostel didn't reconcile (#192)\n"))
+                   (t
+                    (insert "Diagnosis:           pending redisplay; hooks will fire\n")
+                    (insert "                     on next paint\n"))))))))
         ;; Non-default ghostel settings
         (insert "\n--- Non-default ghostel settings ---\n")
         (let (changed)
