@@ -6391,7 +6391,10 @@ rather than the selected window's buffer."
 `keyboard-quit' is bypassed because `inhibit-quit' is set, so both
 side effects have to happen explicitly inside the command."
   (let ((buf (generate-new-buffer " *ghostel-test-c-g-mark*"))
-        (sent nil))
+        (sent nil)
+        ;; `region-active-p' and `deactivate-mark' both gate on
+        ;; `transient-mark-mode', which is off in batch mode by default.
+        (transient-mark-mode t))
     (unwind-protect
         (with-current-buffer buf
           (ghostel-mode)
