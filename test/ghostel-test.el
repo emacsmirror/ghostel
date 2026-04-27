@@ -6942,15 +6942,15 @@ internal `TERM=xterm-ghostty' so a `process-environment' lookup (which
 returns the first match) resolves to the user's value."
   (let ((captured-env nil)
         (orig-make-process (symbol-function #'make-process)))
-    (cl-letf (((symbol-function #'window-body-height)
-               (lambda (&optional _w) 25))
-              ((symbol-function #'window-max-chars-per-line)
-               (lambda (&optional _w) 80))
-              ((symbol-function #'make-process)
+    (cl-letf (((symbol-function #'make-process)
                (lambda (&rest plist)
                  (setq captured-env process-environment)
                  (apply orig-make-process plist))))
       (with-temp-buffer
+        ;; `ghostel--start-process' reads dims from these buffer-locals
+        ;; (set by `ghostel--init-buffer' in the real flow).
+        (setq-local ghostel--term-rows 25
+                    ghostel--term-cols 80)
         (let* ((process-environment '("PATH=/usr/bin:/bin" "HOME=/tmp"))
                (ghostel-shell "/bin/sh")
                (ghostel-shell-integration nil)

@@ -2960,8 +2960,14 @@ matches the PTY window size, and stores the process in
   "Start the shell process with a PTY.
 When `default-directory' is a remote TRAMP path, spawn the shell
 on the remote host."
-  (let* ((height (max 1 (window-body-height)))
-         (width (max 1 (window-max-chars-per-line)))
+  ;; Read dims from the buffer-locals set by `ghostel--init-buffer'
+  ;; (the only caller).  Recomputing from `(window-body-height)' here
+  ;; would query the *selected* window, which can differ from the
+  ;; buffer's window when the buffer is shown in a popup that didn't
+  ;; get selected — leaving the PTY and the libghostty terminal sized
+  ;; against different windows (issue #192).
+  (let* ((height (max 1 ghostel--term-rows))
+         (width (max 1 ghostel--term-cols))
          (remote-p (file-remote-p default-directory))
          (shell (ghostel--get-shell))
          (ghostel-dir (ghostel--resource-root))
