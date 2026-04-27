@@ -3461,6 +3461,40 @@ window (not when it has just been deselected)."
         (let ((ghostel--redraw-resize-active t))
           (ghostel--delayed-redraw buf))))))
 
+(defun ghostel--reconcile-initial-size (buffer)
+  "Re-check BUFFER's window size after display settles and reconcile.
+The dimensions captured by `ghostel--init-buffer' can be stale when
+the window only settles to its final size after the buffer is
+displayed (popup display rules that adjust size during setup,
+layout hooks that fire after `pop-to-buffer', etc.).  Emacs's own
+window-size-change machinery does not catch this case because, from
+its view, the window did not change — only ghostel's snapshot was
+taken too early, leaving the libghostty terminal and the PTY sized
+against a window that no longer reflects reality.
+
+Scheduled once on the idle timer right after `ghostel--start-process'."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((proc ghostel--process)
+                  ((process-live-p proc))
+                  (term ghostel--term)
+                  (w (get-buffer-window buffer t))
+                  ((window-live-p w)))
+        (let ((height (window-body-height w))
+              (width (window-max-chars-per-line w)))
+          (unless (and (eql height ghostel--term-rows)
+                       (eql width ghostel--term-cols))
+            (ghostel--set-size term (max 1 height) (max 1 width))
+            (setq ghostel--term-rows height
+                  ghostel--term-cols width
+                  ghostel--force-next-redraw t)
+            (set-process-window-size proc (max 1 height) (max 1 width))
+            (when ghostel--redraw-timer
+              (cancel-timer ghostel--redraw-timer)
+              (setq ghostel--redraw-timer nil))
+            (let ((ghostel--redraw-resize-active t))
+              (ghostel--delayed-redraw buffer))))))))
+
 
 
 ;;; Major mode
@@ -3538,9 +3572,10 @@ buffer can be found again after title-tracking renames it."
 (defun ghostel--init-buffer (buffer &optional identity)
   "Initialize BUFFER as a ghostel terminal if no terminal handle exists yet.
 Terminal dimensions come from BUFFER's displayed window when one
-exists, otherwise from the selected window.  The terminal resizes
-itself via `window-size-change-functions' once the buffer is
-displayed, so a mismatch at creation time self-corrects.
+exists, otherwise from the selected window.  A post-spawn idle
+timer reconciles the size if the window settles to a different
+height/width after capture (e.g. popup display rules that adjust
+size during display setup).
 IDENTITY, if given, is stored as `ghostel--buffer-identity' so the
 buffer can be found again after title-tracking renames it."
   (with-current-buffer buffer
@@ -3554,7 +3589,10 @@ buffer can be found again after title-tracking renames it."
         (setq ghostel--term-rows height)
         (setq ghostel--term-cols width)
         (ghostel--apply-palette ghostel--term))
-      (ghostel--start-process))))
+      (ghostel--start-process)
+      ;; 0.05s (not 0) so popup display rules that schedule their own deferred
+      ;; resize via`run-with-idle-timer' / `run-at-time' get to run first.
+      (run-with-idle-timer 0.05 nil #'ghostel--reconcile-initial-size buffer))))
 
 (defun ghostel--find-buffer-by-identity (identity)
   "Return the live ghostel buffer whose identity equals IDENTITY, or nil.
@@ -3621,7 +3659,9 @@ Signals `user-error' if BUFFER already has a live ghostel process."
         (setq ghostel--term-cols width)
         (ghostel--apply-palette ghostel--term)
         (ghostel--spawn-pty program args height width
-                            "erase '^?' iutf8 -ixon echo" nil remote-p)))))
+                            "erase '^?' iutf8 -ixon echo" nil remote-p)
+        (run-with-idle-timer 0.05 nil
+                             #'ghostel--reconcile-initial-size buffer)))))
 
 ;;;###autoload
 (defun ghostel-project (&optional arg)

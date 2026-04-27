@@ -6755,15 +6755,13 @@ Setting `LINES'/`COLUMNS' env vars freezes ncurses apps like htop at
 start-up size and breaks live resize."
   (let ((captured-env nil)
         (orig-make-process (symbol-function #'make-process)))
-    (cl-letf (((symbol-function #'window-body-height)
-               (lambda (&optional _w) 43))
-              ((symbol-function #'window-max-chars-per-line)
-               (lambda (&optional _w) 137))
-              ((symbol-function #'make-process)
+    (cl-letf (((symbol-function #'make-process)
                (lambda (&rest plist)
                  (setq captured-env process-environment)
                  (apply orig-make-process plist))))
       (with-temp-buffer
+        (setq-local ghostel--term-rows 43
+                    ghostel--term-cols 137)
         (let* ((process-environment '("PATH=/usr/bin:/bin" "HOME=/tmp"))
                (ghostel-shell "/bin/sh")
                (ghostel-shell-integration nil)
@@ -6796,15 +6794,13 @@ out — otherwise outbound `ssh' (or any consumer of those vars) would
 falsely conclude that ghostty is the controlling terminal."
   (let ((captured-env nil)
         (orig-make-process (symbol-function #'make-process)))
-    (cl-letf (((symbol-function #'window-body-height)
-               (lambda (&optional _w) 25))
-              ((symbol-function #'window-max-chars-per-line)
-               (lambda (&optional _w) 80))
-              ((symbol-function #'make-process)
+    (cl-letf (((symbol-function #'make-process)
                (lambda (&rest plist)
                  (setq captured-env process-environment)
                  (apply orig-make-process plist))))
       (with-temp-buffer
+        (setq-local ghostel--term-rows 25
+                    ghostel--term-cols 80)
         (let* ((process-environment '("PATH=/usr/bin:/bin" "HOME=/tmp"))
                (ghostel-shell "/bin/sh")
                (ghostel-shell-integration nil)
@@ -6832,15 +6828,13 @@ when that's non-nil, off otherwise.  Setting it to t forces on,
 setting it to nil forces off."
   (let ((captured-env nil)
         (orig-make-process (symbol-function #'make-process)))
-    (cl-letf (((symbol-function #'window-body-height)
-               (lambda (&optional _w) 25))
-              ((symbol-function #'window-max-chars-per-line)
-               (lambda (&optional _w) 80))
-              ((symbol-function #'make-process)
+    (cl-letf (((symbol-function #'make-process)
                (lambda (&rest plist)
                  (setq captured-env process-environment)
                  (apply orig-make-process plist))))
       (with-temp-buffer
+        (setq-local ghostel--term-rows 25
+                    ghostel--term-cols 80)
         (let* ((process-environment '("PATH=/usr/bin:/bin" "HOME=/tmp"))
                (ghostel-shell "/bin/sh")
                (ghostel-shell-integration nil)
@@ -7079,15 +7073,13 @@ Old bash versions can initialize readline before the ENV-injected
 integration script runs, so input echo must be enabled before exec."
   (let ((captured-env nil)
         (orig-make-process (symbol-function #'make-process)))
-    (cl-letf (((symbol-function #'window-body-height)
-               (lambda (&optional _w) 25))
-              ((symbol-function #'window-max-chars-per-line)
-               (lambda (&optional _w) 80))
-              ((symbol-function #'make-process)
+    (cl-letf (((symbol-function #'make-process)
                (lambda (&rest plist)
                  (setq captured-env process-environment)
                  (apply orig-make-process plist))))
       (with-temp-buffer
+        (setq-local ghostel--term-rows 25
+                    ghostel--term-cols 80)
         (let* ((process-environment '("PATH=/usr/bin:/bin" "HOME=/tmp"))
                (ghostel-shell "/bin/bash")
                (ghostel-shell-integration t)
@@ -7380,6 +7372,136 @@ It must also raise `read-process-output-max'.  Same reason as
         (ghostel--commit-cropped-size 'test-win)
         (should-not set-size-called)
         (should-not swsize-called)))))
+
+(ert-deftest ghostel-test-reconcile-initial-size-resizes-on-mismatch ()
+  "If the buffer's window size differs from the captured value, resize.
+Models the issue #192 race where `ghostel--init-buffer' captured a
+stale popup size that the layout settled past before the timer fired."
+  (with-temp-buffer
+    (let ((ghostel--term 'fake)
+          (ghostel--process 'fake-proc)
+          (ghostel--term-rows 32)
+          (ghostel--term-cols 87)
+          (ghostel--force-next-redraw nil)
+          (set-size-args nil)
+          (swsize-args nil)
+          (redraw-called nil)
+          (buf (current-buffer)))
+      (cl-letf (((symbol-function 'ghostel--set-size)
+                 (lambda (_term h w) (setq set-size-args (list h w))))
+                ((symbol-function 'ghostel--delayed-redraw)
+                 (lambda (_buf) (setq redraw-called t)))
+                ((symbol-function 'process-live-p) (lambda (_p) t))
+                ((symbol-function 'set-process-window-size)
+                 (lambda (_p h w) (setq swsize-args (list h w))))
+                ((symbol-function 'get-buffer-window)
+                 (lambda (_b _f) 'test-win))
+                ((symbol-function 'window-live-p) (lambda (_w) t))
+                ((symbol-function 'window-body-height) (lambda (&rest _) 34))
+                ((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 87)))
+        (ghostel--reconcile-initial-size buf)
+        (should (equal '(34 87) set-size-args))
+        (should (equal '(34 87) swsize-args))
+        (should (eql ghostel--term-rows 34))
+        (should (eql ghostel--term-cols 87))
+        (should ghostel--force-next-redraw)
+        (should redraw-called)))))
+
+(ert-deftest ghostel-test-reconcile-initial-size-noop-on-match ()
+  "If the window size already matches the captured value, do nothing."
+  (with-temp-buffer
+    (let ((ghostel--term 'fake)
+          (ghostel--process 'fake-proc)
+          (ghostel--term-rows 34)
+          (ghostel--term-cols 87)
+          (set-size-called nil)
+          (swsize-called nil)
+          (buf (current-buffer)))
+      (cl-letf (((symbol-function 'ghostel--set-size)
+                 (lambda (_term _h _w) (setq set-size-called t)))
+                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
+                ((symbol-function 'process-live-p) (lambda (_p) t))
+                ((symbol-function 'set-process-window-size)
+                 (lambda (_p _h _w) (setq swsize-called t)))
+                ((symbol-function 'get-buffer-window)
+                 (lambda (_b _f) 'test-win))
+                ((symbol-function 'window-live-p) (lambda (_w) t))
+                ((symbol-function 'window-body-height) (lambda (&rest _) 34))
+                ((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 87)))
+        (ghostel--reconcile-initial-size buf)
+        (should-not set-size-called)
+        (should-not swsize-called)))))
+
+(ert-deftest ghostel-test-reconcile-initial-size-noop-when-not-displayed ()
+  "If the buffer is not in any window, do nothing.
+Late timer firing after the user already killed the window must not
+crash or pick a wrong window."
+  (with-temp-buffer
+    (let ((ghostel--term 'fake)
+          (ghostel--process 'fake-proc)
+          (ghostel--term-rows 32)
+          (ghostel--term-cols 87)
+          (set-size-called nil)
+          (buf (current-buffer)))
+      (cl-letf (((symbol-function 'ghostel--set-size)
+                 (lambda (_term _h _w) (setq set-size-called t)))
+                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
+                ((symbol-function 'process-live-p) (lambda (_p) t))
+                ((symbol-function 'get-buffer-window)
+                 (lambda (_b _f) nil)))
+        (ghostel--reconcile-initial-size buf)
+        (should-not set-size-called)))))
+
+(ert-deftest ghostel-test-reconcile-initial-size-noop-when-process-dead ()
+  "If the process died before the timer fires, do nothing.
+The shell can exit between `--start-process' and the idle tick (e.g.
+exec'd PROGRAM that crashes immediately); reconciliation must not
+SIGWINCH a corpse."
+  (with-temp-buffer
+    (let ((ghostel--term 'fake)
+          (ghostel--process 'fake-proc)
+          (ghostel--term-rows 32)
+          (ghostel--term-cols 87)
+          (set-size-called nil)
+          (swsize-called nil)
+          (buf (current-buffer)))
+      (cl-letf (((symbol-function 'ghostel--set-size)
+                 (lambda (_term _h _w) (setq set-size-called t)))
+                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
+                ((symbol-function 'process-live-p) (lambda (_p) nil))
+                ((symbol-function 'set-process-window-size)
+                 (lambda (_p _h _w) (setq swsize-called t)))
+                ((symbol-function 'get-buffer-window)
+                 (lambda (_b _f) 'test-win))
+                ((symbol-function 'window-live-p) (lambda (_w) t))
+                ((symbol-function 'window-body-height) (lambda (&rest _) 34))
+                ((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 87)))
+        (ghostel--reconcile-initial-size buf)
+        (should-not set-size-called)
+        (should-not swsize-called)))))
+
+(ert-deftest ghostel-test-reconcile-initial-size-noop-when-term-nil ()
+  "If `ghostel--term' was never created, do nothing.
+The `when-let*' must short-circuit before calling `ghostel--set-size'
+on a nil terminal."
+  (with-temp-buffer
+    (let ((ghostel--term nil)
+          (ghostel--process 'fake-proc)
+          (ghostel--term-rows nil)
+          (ghostel--term-cols nil)
+          (set-size-called nil)
+          (buf (current-buffer)))
+      (cl-letf (((symbol-function 'ghostel--set-size)
+                 (lambda (_term _h _w) (setq set-size-called t)))
+                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
+                ((symbol-function 'process-live-p) (lambda (_p) t))
+                ((symbol-function 'get-buffer-window)
+                 (lambda (_b _f) 'test-win))
+                ((symbol-function 'window-live-p) (lambda (_w) t))
+                ((symbol-function 'window-body-height) (lambda (&rest _) 34))
+                ((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 87)))
+        (ghostel--reconcile-initial-size buf)
+        (should-not set-size-called)))))
 
 ;;; SIGWINCH delivery tests — verify the PTY actually sends the signal
 
@@ -7778,6 +7900,11 @@ while :; do sleep 0.1; done'\n")
     ghostel-test-commit-cropped-size-noop-outside-minibuffer
     ghostel-test-commit-cropped-size-noop-on-deselect
     ghostel-test-commit-cropped-size-noop-when-matched
+    ghostel-test-reconcile-initial-size-resizes-on-mismatch
+    ghostel-test-reconcile-initial-size-noop-on-match
+    ghostel-test-reconcile-initial-size-noop-when-not-displayed
+    ghostel-test-reconcile-initial-size-noop-when-process-dead
+    ghostel-test-reconcile-initial-size-noop-when-term-nil
     ghostel-test-sigwinch-reaches-shell-basic
     ghostel-test-sigwinch-reaches-shell-ghostel-style
     ghostel-test-sigwinch-reaches-child-process
