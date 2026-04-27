@@ -1447,9 +1447,11 @@ paste rather than character-by-character typed keystrokes."
 (defun ghostel-send-C-g ()
   "Send \\`C-g' to the terminal.
 Clears `quit-flag' which Emacs sets when \\`C-g' is pressed with
-`inhibit-quit' non-nil."
+`inhibit-quit' non-nil, and deactivates the mark so the region
+overlay clears the way \\`keyboard-quit' would in other buffers."
   (interactive)
   (setq quit-flag nil)
+  (deactivate-mark)
   (ghostel--send-string (string 7)))
 
 

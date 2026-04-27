@@ -6386,6 +6386,29 @@ rather than the selected window's buffer."
           (should (local-variable-p 'inhibit-quit)))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-c-g-deactivates-mark ()
+  "`ghostel-send-C-g' should clear an active region and `quit-flag'.
+`keyboard-quit' is bypassed because `inhibit-quit' is set, so both
+side effects have to happen explicitly inside the command."
+  (let ((buf (generate-new-buffer " *ghostel-test-c-g-mark*"))
+        (sent nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (ghostel-mode)
+          (insert "hello world")
+          (goto-char (point-min))
+          (set-mark (point))
+          (goto-char (point-max))
+          (should (region-active-p))
+          (setq quit-flag t)
+          (cl-letf (((symbol-function 'ghostel--send-string)
+                     (lambda (s) (push s sent))))
+            (ghostel-send-C-g))
+          (should-not (region-active-p))
+          (should-not quit-flag)
+          (should (equal sent (list (string 7)))))
+      (kill-buffer buf))))
+
 (ert-deftest ghostel-test-meta-key-bindings ()
   "All non-exception M-<letter> keys should be bound in ghostel-mode-map."
   (dolist (c (number-sequence ?a ?z))
