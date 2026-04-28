@@ -2,6 +2,136 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.19.0] — 2026-04-29
+
+### Added
+- `ghostel-debug-keypress` arms a one-shot capture of the next
+  keystroke in the current ghostel buffer and renders a paste-ready
+  diagnostic (raw event, resolved keymap binding, every byte sent,
+  active DEC mode flags, coalesce-buffer state) into
+  `*ghostel-debug-keypress*` — enough to distinguish kitty CSI-u from
+  legacy encoding without any new native binding
+  ([07b8438](https://github.com/dakra/ghostel/commit/07b8438)).
+- `ghostel-debug-info` gains an `Environment` block (env vars passed
+  to the spawned shell — `TERM`, `COLORTERM`, `TERMINFO`,
+  `TERM_PROGRAM`, `INSIDE_EMACS`, `ghostel-environment` overrides,
+  and pass-through `LANG`/`LC_*`), a `Size sync` block (Emacs window
+  body rows vs `ghostel--term-rows` vs Emacs's recorded
+  `old-body-pixel-height`, with explicit verdicts for in-sync /
+  chrome-absorbed-but-unreconciled / pending-redisplay), and a
+  `Rendering` block (default face, resolved font with
+  fallback/remap detection, `line-spacing` broken into
+  buffer-local / default-value / frame-parameter,
+  `face-remapping-alist`).  The buffer is now read-only
+  (`special-mode`, `q` to quit), module-file lookup works in the
+  dev / `package-vc` layout, and customized defcustoms are
+  auto-detected by comparing against `standard-value`
+  ([0b19011](https://github.com/dakra/ghostel/commit/0b19011),
+  [d717732](https://github.com/dakra/ghostel/commit/d717732),
+  [ea594fc](https://github.com/dakra/ghostel/commit/ea594fc),
+  [e8eb2f8](https://github.com/dakra/ghostel/commit/e8eb2f8)).
+- FreeBSD release artifact built via Zig cross-compile from the
+  Linux CI runner, using the same matrix-driven `-Dtarget=...`
+  pattern as `aarch64-linux-gnu`
+  ([81abb18](https://github.com/dakra/ghostel/commit/81abb18)).
+- `list-buffers-directory` is set to the buffer's `default-directory`
+  in `ghostel-mode` and `ghostel-compile-view-mode`, and is updated
+  by OSC 7 directory tracking — so `buffer-menu` / `ibuffer` (and
+  any consumer that reads the variable) can categorise ghostel
+  terminals by working directory.  Mirrors `shell-mode`'s convention
+  ([75fe69f](https://github.com/dakra/ghostel/commit/75fe69f)).
+- `tui-partial` benchmark renders the static screen once, then
+  updates only the bottom row per iteration — the workload that
+  status bars and prompt redraws actually produce.  Exposes that
+  ghostel's per-row dirty-bit branch is 8–13× faster than full mode
+  at 24×80 and 40×120
+  ([6a4a069](https://github.com/dakra/ghostel/commit/6a4a069)).
+
+### Changed
+- Native rendering rewritten.  Each pass parks the libghostty
+  terminal at `max_offset - 1`, which lets us track scrollback
+  correctly across the libghostty cap by detecting eviction from
+  the parked offset, identify scrollback-clear (`CSI 3J` et al.)
+  reliably via the `offset+len==total` snap-back signal without
+  per-byte VT scanning, use libghostty dirty flags directly to
+  identify stale lines (fixes the case where promoted scrollback
+  rows could carry outdated content), and evict old scrollback rows
+  from the Emacs buffer in lockstep with libghostty's ring-buffer
+  wrap.  OSC 8 hyperlink handling switches from storing URI strings
+  on every run to a lazy `help-echo` lookup via
+  `ghostel--native-uri-at`.  The Emacs buffer now always carries a
+  trailing newline so line-math is uniform across the codebase
+  ([8e3135f](https://github.com/dakra/ghostel/commit/8e3135f)).
+- PTY size is now captured against the buffer's window via
+  `window-screen-lines`, not the selected window via
+  `window-body-height`.  When a theme remaps the buffer's default
+  face — e.g. `nano-light`/`nano-dark` bumping it ~7% — the two
+  metrics disagree and the previous capture spawned the PTY too
+  tall, then issued a startup SIGWINCH that some TUIs (Claude
+  Code's `/tui` fullscreen) mishandle.  Updates every spawn /
+  commit / reconcile site (`ghostel--init-buffer`, `ghostel-exec`,
+  `ghostel--commit-cropped-size`, `ghostel-compile`).  Closes
+  [#192](https://github.com/dakra/ghostel/issues/192)
+  ([23cdc7c](https://github.com/dakra/ghostel/commit/23cdc7c),
+  [ce966eb](https://github.com/dakra/ghostel/commit/ce966eb)).
+- Terminal size is reconciled via `window-buffer-change-functions`
+  (event-driven) instead of a 50 ms idle timer.  When a ghostel
+  buffer migrates to a window of a different size (popup dismissed,
+  `+popup/raise`, etc.) no Emacs-visible window-size-change event
+  fires — only the buffer-to-window mapping changed — so the
+  existing `adjust-window-size-function` machinery did not run.
+  The hook covers the buffer's whole lifetime cleanly
+  ([387c275](https://github.com/dakra/ghostel/commit/387c275),
+  [b9c12ca](https://github.com/dakra/ghostel/commit/b9c12ca)).
+- README's manual `~/.bashrc` / `~/.zshrc` /
+  `~/.config/fish/config.fish` source gate now uses a prefix match
+  (`${INSIDE_EMACS%%,*}`, fish-anchored regex) so TRAMP-rewritten
+  `INSIDE_EMACS=ghostel,tramp:VER` matches.  The remote-host gate
+  adds a `TERM=xterm-ghostty` fallback because plain `ssh` cannot
+  propagate `INSIDE_EMACS` without `AcceptEnv` configured
+  server-side.  Also updates the source-comment header in
+  `etc/shell/ghostel.{bash,zsh,fish}` and adds a TRAMP canary test
+  on `tramp-inside-emacs`
+  ([d3ecac0](https://github.com/dakra/ghostel/commit/d3ecac0)).
+- `package-lint`, `checkdoc`, and `docquotes` (a regex check for
+  back/front-quoted non-symbols, widened from melpazoid's `[A-Z]+`
+  to `[A-Z_]+` so identifiers like `INSIDE_EMACS` aren't skipped)
+  now run in CI as a single Emacs 29.4 lint job; `evil-ghostel.el`
+  is byte-compiled and linted alongside `lisp/`
+  ([5d73106](https://github.com/dakra/ghostel/commit/5d73106),
+  [5321d1b](https://github.com/dakra/ghostel/commit/5321d1b)).
+
+### Fixed
+- Coalesced single-byte input is drained before every direct PTY
+  write from Zig (key encoder, mouse encoder, OSC 4/10/11 replies,
+  focus events, VT write-back).  Encoded keystrokes could otherwise
+  overtake preceding self-insert bytes
+  ([0b37dae](https://github.com/dakra/ghostel/commit/0b37dae)).
+- `C-g` in a ghostel buffer now also deactivates the active region,
+  matching the side effect users expect from `keyboard-quit` (the
+  `inhibit-quit` binding routes `C-g` through the keymap to
+  `ghostel-send-C-g`, which previously only sent SIGINT).  Closes
+  [#200](https://github.com/dakra/ghostel/issues/200)
+  ([14b4e85](https://github.com/dakra/ghostel/commit/14b4e85),
+  [7631ea9](https://github.com/dakra/ghostel/commit/7631ea9)).
+- IME preedit anchor stays stable during redraw — the cursor row
+  no longer drifts while typing into an active preedit window
+  ([90f1f71](https://github.com/dakra/ghostel/commit/90f1f71)).
+- Evil state transitions no longer wipe + rebuild the buffer once
+  any scrollback exists.  A `defer` in `fnCursorPosition` /
+  `fnDebugState` / `fnDebugFeed` was scoped to an inner
+  `if (term.getScrollbar()) |sb| { … }` block, so the
+  viewport-restore fired before the `SCROLL_BOTTOM` call below it.
+  Each call left libghostty parked at the bottom
+  (`offset+len==total`), which the next redraw mistook for a
+  scrollback-clear signal.  Hoisted the defer to function scope.
+  Folded in: a heap-fallback `defer ... .free(buf)` in `fnUriAt`
+  was scoped to the inner alloc block and freed before
+  `makeString` read through the alias — hoisted, plus a `SUCCESS`
+  check on `ghostty_grid_ref_hyperlink_uri` so error returns no
+  longer stringify uninitialised data
+  ([8e3135f](https://github.com/dakra/ghostel/commit/8e3135f)).
+
 ## [0.18.1] — 2026-04-25
 
 ### Added
@@ -781,6 +911,8 @@ Initial tagged release.
 - GPL3 license and expanded commentary section ([1d676df](https://github.com/dakra/ghostel/commit/1d676df)).
 - README with build instructions, features, and configuration ([c43bf6a](https://github.com/dakra/ghostel/commit/c43bf6a)).
 
+[0.19.0]: https://github.com/dakra/ghostel/compare/v0.18.1...v0.19.0
+[0.18.1]: https://github.com/dakra/ghostel/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/dakra/ghostel/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/dakra/ghostel/compare/v0.16.3...v0.17.0
 [0.16.3]: https://github.com/dakra/ghostel/compare/v0.16.2...v0.16.3
