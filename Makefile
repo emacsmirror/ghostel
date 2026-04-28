@@ -8,7 +8,7 @@ ELC := lisp/ghostel.elc lisp/ghostel-debug.elc lisp/ghostel-compile.elc \
        lisp/ghostel-eshell.elc \
        extensions/evil-ghostel/evil-ghostel.elc
 
-.PHONY: all build test test-native test-all test-evil lint melpazoid melpazoid-ghostel melpazoid-evil-ghostel byte-compile docquotes bench bench-quick clean regen-terminfo
+.PHONY: all build test test-native test-all test-evil lint melpazoid melpazoid-ghostel melpazoid-evil-ghostel byte-compile docquotes bench bench-quick bench-tui-partial clean regen-terminfo
 
 all: build test-all test-evil lint
 
@@ -114,6 +114,10 @@ bench:
 
 bench-quick:
 	bash bench/run-bench.sh --quick
+
+bench-tui-partial:
+	$(EMACS) --batch -Q -L lisp -l bench/ghostel-bench.el \
+		--eval '(progn (setq ghostel-bench-include-vterm nil ghostel-bench-include-eat nil ghostel-bench-include-term nil) (ghostel-bench--load-backends) (ghostel-bench--run-tui-partial-scenarios))'
 
 clean:
 	rm -f ghostel-module.dylib ghostel-module.so

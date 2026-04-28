@@ -658,6 +658,128 @@ content — relevant for apps like htop, vim, claude-code."
               (delete-process proc))))))))
 
 ;; =========================================================================
+;; SECTION 3b: TUI partial-update — static screen + status-line update
+;; =========================================================================
+
+(defun ghostel-bench--run-tui-partial-scenarios ()
+  "Benchmark partial-update workload (status-line update over static screen).
+The `tui-frame' scenario rewrites every row per iteration, so it cannot
+distinguish backends that honor per-row dirty tracking from those that
+re-render unconditionally.  Here the static screen is rendered once and
+only the bottom row is rewritten per iteration — the workload that
+status bars, prompt redraws, and most TUI updates actually produce."
+  (message "\n--- TUI Partial Update (bottom-row update over static screen) ---")
+  (message "  %-50s %5s  %8s  %10s  %8s" "SCENARIO" "ITERS" "TOTAL(s)" "ITER(ms)" "fps")
+  (message "  %s" (make-string 90 ?-))
+  (let ((partial-iters (* ghostel-bench-iterations 1000)))
+    (dolist (size ghostel-bench-terminal-sizes)
+      (let* ((rows (car size))
+             (cols (cdr size))
+             (label (format "%dx%d" rows cols))
+             (static-frame (ghostel-bench--gen-tui-frame rows cols))
+             (status-template (format "\e[%d;1H\e[1;33;41m%%-%ds\e[0m" rows cols)))
+        ;; ghostel incremental
+        (with-temp-buffer
+          (let* ((static (ghostel-bench--encode-for-backend static-frame 'ghostel))
+                 (term (ghostel-bench--make-ghostel rows cols))
+                 (ghostel-enable-url-detection nil)
+                 (ghostel-enable-file-detection nil)
+                 (inhibit-read-only t)
+                 (counter 0))
+            (ghostel--write-input term static)
+            (ghostel--redraw term t)
+            (let ((result
+                   (ghostel-bench--measure
+                    (format "tui-partial/ghostel-incr/%s" label)
+                    cols partial-iters
+                    (lambda ()
+                      (cl-incf counter)
+                      (ghostel--write-input
+                       term (format status-template (format "status #%d" counter)))
+                      (ghostel--redraw term nil)))))
+              (message "    ^ %.0f fps" (/ 1000.0 (plist-get result :per-iter-ms))))))
+        ;; ghostel full
+        (with-temp-buffer
+          (let* ((static (ghostel-bench--encode-for-backend static-frame 'ghostel))
+                 (term (ghostel-bench--make-ghostel rows cols))
+                 (ghostel-enable-url-detection nil)
+                 (ghostel-enable-file-detection nil)
+                 (inhibit-read-only t)
+                 (counter 0))
+            (ghostel--write-input term static)
+            (ghostel--redraw term t)
+            (let ((result
+                   (ghostel-bench--measure
+                    (format "tui-partial/ghostel-full/%s" label)
+                    cols partial-iters
+                    (lambda ()
+                      (cl-incf counter)
+                      (ghostel--write-input
+                       term (format status-template (format "status #%d" counter)))
+                      (ghostel--redraw term t)))))
+              (message "    ^ %.0f fps" (/ 1000.0 (plist-get result :per-iter-ms))))))
+        ;; vterm
+        (when ghostel-bench-include-vterm
+          (with-temp-buffer
+            (let* ((static (ghostel-bench--encode-for-backend static-frame 'vterm))
+                   (term (ghostel-bench--make-vterm rows cols))
+                   (counter 0))
+              (vterm--write-input term static)
+              (vterm--redraw term)
+              (let ((result
+                     (ghostel-bench--measure
+                      (format "tui-partial/vterm/%s" label)
+                      cols partial-iters
+                      (lambda ()
+                        (cl-incf counter)
+                        (vterm--write-input
+                         term (format status-template (format "status #%d" counter)))
+                        (vterm--redraw term)))))
+                (message "    ^ %.0f fps" (/ 1000.0 (plist-get result :per-iter-ms)))))))
+        ;; eat
+        (when ghostel-bench-include-eat
+          (with-temp-buffer
+            (let* ((static (ghostel-bench--encode-for-backend static-frame 'eat))
+                   (term (ghostel-bench--make-eat rows cols))
+                   (inhibit-read-only t)
+                   (counter 0))
+              (eat-term-process-output term static)
+              (eat-term-redisplay term)
+              (let ((result
+                     (ghostel-bench--measure
+                      (format "tui-partial/eat/%s" label)
+                      cols partial-iters
+                      (lambda ()
+                        (cl-incf counter)
+                        (eat-term-process-output
+                         term (ghostel-bench--encode-for-backend
+                               (format status-template (format "status #%d" counter))
+                               'eat))
+                        (eat-term-redisplay term)))))
+                (message "    ^ %.0f fps" (/ 1000.0 (plist-get result :per-iter-ms))))
+              (eat-term-delete term))))
+        ;; term
+        (when ghostel-bench-include-term
+          (with-temp-buffer
+            (let* ((static (ghostel-bench--encode-for-backend static-frame 'term))
+                   (proc (ghostel-bench--make-term rows cols))
+                   (inhibit-read-only t)
+                   (counter 0))
+              (term-emulate-terminal proc static)
+              (let ((result
+                     (ghostel-bench--measure
+                      (format "tui-partial/term/%s" label)
+                      cols partial-iters
+                      (lambda ()
+                        (cl-incf counter)
+                        (term-emulate-terminal
+                         proc (ghostel-bench--encode-for-backend
+                               (format status-template (format "status #%d" counter))
+                               'term))))))
+                (message "    ^ %.0f fps" (/ 1000.0 (plist-get result :per-iter-ms))))
+              (delete-process proc))))))))
+
+;; =========================================================================
 ;; SECTION 4: Engine micro-benchmarks (bulk parse/render, single call)
 ;; =========================================================================
 
@@ -855,6 +977,7 @@ real-world performance (see PTY and streaming benchmarks for that)."
   (ghostel-bench--run-pty-scenarios)
   (ghostel-bench--run-stream-scenarios)
   (ghostel-bench--run-tui-scenarios)
+  (ghostel-bench--run-tui-partial-scenarios)
   (ghostel-bench--run-engine-scenarios)
   (ghostel-bench--print-summary))
 
