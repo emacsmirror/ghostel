@@ -22,19 +22,6 @@ const CellStyle = struct {
     inverse: bool = false,
     hyperlink: bool = false,
 
-    fn eql(a: CellStyle, b: CellStyle) bool {
-        return colorEql(a.fg, b.fg) and
-            colorEql(a.bg, b.bg) and
-            a.bold == b.bold and
-            a.italic == b.italic and
-            a.faint == b.faint and
-            a.underline == b.underline and
-            colorEql(a.underline_color, b.underline_color) and
-            a.strikethrough == b.strikethrough and
-            a.inverse == b.inverse and
-            a.hyperlink == b.hyperlink;
-    }
-
     fn isDefault(self: CellStyle) bool {
         return self.fg == null and
             self.bg == null and
@@ -48,13 +35,18 @@ const CellStyle = struct {
     }
 };
 
+// Unique identifier for what we consider a style. Normally, you would only use
+// style_id for this but we also use Emacs text properties for hyperlinks so
+// we include "hyperlink-ness" here.
+const CellStyleKey = struct { style_id: gt.c.GhosttyStyleId, hyperlink: bool };
+
 /// Track style runs for propertizing after insertion.
 /// Positions are in characters (codepoints), not bytes, because
 /// Emacs put-text-property works with character positions.
 const RunInfo = struct {
     start_char: usize,
     end_char: usize,
-    style: CellStyle,
+    style: ?CellStyle,
 };
 
 fn colorEql(a: ?gt.ColorRgb, b: ?gt.ColorRgb) bool {
@@ -87,7 +79,7 @@ fn formatColor(color: gt.ColorRgb, buf: *[7]u8) []const u8 {
 }
 
 /// Read the style for the current cell from the render state.
-fn readCellStyle(cells: gt.RenderStateRowCells, raw: gt.c.GhosttyCell) CellStyle {
+fn readCellStyle(cells: gt.RenderStateRowCells, raw: gt.c.GhosttyCell) ?CellStyle {
     var style: CellStyle = .{};
 
     // Read resolved FG color
@@ -124,13 +116,12 @@ fn readCellStyle(cells: gt.RenderStateRowCells, raw: gt.c.GhosttyCell) CellStyle
         style.hyperlink = hl;
     }
 
-    return style;
+    return if (style.isDefault()) null else style;
 }
 
 /// Apply face properties to a region of the buffer.
 /// Uses (put-text-property START END 'face PLIST).
 fn applyStyle(env: emacs.Env, start: i64, end: i64, style: CellStyle, default_colors: *const BgFg) void {
-    if (style.isDefault()) return;
     if (start >= end) return;
 
     var face_props: [24]emacs.Value = undefined;
@@ -273,6 +264,13 @@ const RowContent = struct {
     has_wide: bool,
 };
 
+fn getStyleKey(cell: gt.c.GhosttyCell) CellStyleKey {
+    var key = CellStyleKey{ .style_id = 0, .hyperlink = false };
+    _ = gt.c.ghostty_cell_get(cell, gt.c.GHOSTTY_CELL_DATA_STYLE_ID, @ptrCast(&key.style_id));
+    _ = gt.c.ghostty_cell_get(cell, gt.c.GHOSTTY_CELL_DATA_HAS_HYPERLINK, @ptrCast(&key.hyperlink));
+    return key;
+}
+
 /// Build text content and style runs for the current row in the iterator.
 /// Style runs use character (codepoint) offsets for Emacs put-text-property.
 ///
@@ -299,9 +297,8 @@ fn buildRowContent(
     var prompt_char_len: usize = 0; // chars that are semantic prompt
     var in_prompt: bool = true; // track contiguous leading prompt cells
     var has_wide: bool = false;
+    var current_style_key: ?CellStyleKey = null;
     run_count.* = 0;
-    var current_style: CellStyle = .{};
-    var run_start_char: usize = 0;
 
     while (gt.c.ghostty_render_state_row_cells_next(term.row_cells)) {
         var graphemes_len: u32 = 0;
@@ -322,22 +319,21 @@ fn buildRowContent(
             }
         }
 
-        const cell_style = readCellStyle(term.row_cells, raw_cell);
-
-        // Flush run on style change
-        if (char_len > run_start_char and !cell_style.eql(current_style)) {
-            if (run_count.* < runs.len) {
-                runs[run_count.*] = .{
-                    .start_char = run_start_char,
-                    .end_char = char_len,
-                    .style = current_style,
-                };
-                run_count.* += 1;
-            }
-            run_start_char = char_len;
-            current_style = cell_style;
-        } else if (char_len == run_start_char) {
-            current_style = cell_style;
+        // We use a "key" that holds a minimum set of values that are cheap to
+        // read and compare to detect style run breaks. Only when we detect a
+        // break do we read the cell style, which is a more expensive operation
+        // in such a tight loop.
+        const style_key: CellStyleKey = getStyleKey(raw_cell);
+        if (!std.meta.eql(@as(?CellStyleKey, style_key), current_style_key) and run_count.* < runs.len) {
+            runs[run_count.*] = .{
+                .start_char = char_len,
+                .end_char = char_len + 1,
+                .style = readCellStyle(term.row_cells, raw_cell),
+            };
+            run_count.* += 1;
+            current_style_key = style_key;
+        } else {
+            runs[run_count.* - 1].end_char += 1;
         }
 
         if (graphemes_len == 0) {
@@ -347,6 +343,7 @@ fn buildRowContent(
             var wide: c_int = gt.c.GHOSTTY_CELL_WIDE_NARROW;
             _ = gt.c.ghostty_cell_get(raw_cell, gt.c.GHOSTTY_CELL_DATA_WIDE, @ptrCast(&wide));
             if (wide == gt.c.GHOSTTY_CELL_WIDE_SPACER_TAIL) {
+                runs[run_count.* - 1].end_char -= 1;
                 has_wide = true;
                 continue;
             }
@@ -358,7 +355,7 @@ fn buildRowContent(
             if (in_prompt) prompt_char_len = char_len;
             // Empty cells are blank for trim purposes unless their
             // style has a visible attribute (e.g. colored background).
-            if (!cell_style.isDefault()) {
+            if (runs[run_count.* - 1].style != null) {
                 trim_text_len = text_len;
                 trim_char_len = char_len;
             }
@@ -397,16 +394,6 @@ fn buildRowContent(
     text_len = trim_text_len;
     char_len = trim_char_len;
     if (prompt_char_len > char_len) prompt_char_len = char_len;
-
-    // Close final run
-    if (char_len > run_start_char and run_count.* < runs.len) {
-        runs[run_count.*] = .{
-            .start_char = run_start_char,
-            .end_char = char_len,
-            .style = current_style,
-        };
-        run_count.* += 1;
-    }
 
     return .{ .byte_len = text_len, .char_len = char_len, .prompt_char_len = prompt_char_len, .has_wide = has_wide };
 }
@@ -453,7 +440,9 @@ fn insertAndStyle(
 
         const prop_start = row_start + @as(i64, @intCast(run.start_char));
         const prop_end = row_start + @as(i64, @intCast(run_end));
-        applyStyle(env, prop_start, prop_end, run.style, default_colors);
+        if (run.style) |style| {
+            applyStyle(env, prop_start, prop_end, style, default_colors);
+        }
     }
 
     if (!newline_in_buf) {
