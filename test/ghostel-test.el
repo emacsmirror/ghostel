@@ -1880,6 +1880,50 @@ the reply waits for the redraw timer."
             (should ghostel--pending-output)))
       (kill-buffer buf))))
 
+(ert-deftest ghostel-test-osc51-eval-filter-flush ()
+  "The process filter must dispatch OSC 51;E synchronously.
+Callers like `b4 prep --edit-cover' delete temp files shortly
+after sending the OSC; a delayed dispatch (via the redraw timer)
+loses the race with `tempfile.TemporaryDirectory' cleanup, so
+`find-file' opens a file whose parent directory is already gone."
+  (let ((buf (generate-new-buffer " *ghostel-osc51-flush*"))
+        (fake-proc (make-symbol "fake-proc"))
+        (dispatched nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq ghostel--term (ghostel--new 25 80 1000))
+          (setq ghostel--process fake-proc)
+          (let ((ghostel-eval-cmds
+                 `(("noop" ,(lambda (&rest args)
+                              (setq dispatched (cons 'noop args)))))))
+            (cl-letf (((symbol-function 'process-buffer) (lambda (_) buf))
+                      ((symbol-function 'process-live-p) (lambda (_) t))
+                      ((symbol-function 'ghostel--invalidate) #'ignore))
+              ;; OSC 51;E must run before `ghostel--filter' returns.
+              (ghostel--filter fake-proc "\e]51;Enoop \"hi\"\e\\")
+              (should (equal '(noop "hi") dispatched))
+              (should (equal nil ghostel--pending-output))
+
+              ;; OSC 51;A (directory tracking, not elisp eval) must NOT
+              ;; trigger the sync flush — it's harmless to defer.
+              (setq dispatched nil)
+              (ghostel--filter fake-proc "\e]51;A/tmp\e\\")
+              (should (equal nil dispatched))
+              (should ghostel--pending-output)
+
+              ;; The OSC introducer can straddle a filter-call boundary
+              ;; (slow producers, SSH, tiny TCP segments).  The first
+              ;; chunk alone doesn't match — but the second chunk plus
+              ;; the carryover tail of the first must trigger dispatch.
+              (setq dispatched nil
+                    ghostel--pending-output nil)
+              (ghostel--filter fake-proc "prefix\e]51;")
+              (should (equal nil dispatched))
+              (ghostel--filter fake-proc "Enoop \"split\"\e\\")
+              (should (equal '(noop "split") dispatched))
+              (should (equal nil ghostel--pending-output)))))
+      (kill-buffer buf))))
+
 ;; -----------------------------------------------------------------------
 ;; Test: focus events gated by mode 1004
 ;; -----------------------------------------------------------------------

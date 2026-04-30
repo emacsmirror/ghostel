@@ -2992,14 +2992,18 @@ the redraw is performed immediately to minimize typing latency."
       (when ghostel--term
         ;; Accumulate output for batched write-input at redraw time.
         (push output ghostel--pending-output)
-        ;; Respond to OSC 4/10/11 color queries immediately: programs like
-        ;; `duf' read stdin with a tight timeout and give up if the reply
-        ;; waits for the redraw timer.  Flushing runs the extractor in the
-        ;; native module, which writes the reply back through the PTY
-        ;; before this filter returns.
-        (when (string-match-p
-               "\e\\]\\(?:4;[0-9]+;\\?\\|10;\\?\\|11;\\?\\)" output)
-          (ghostel--flush-pending-output))
+        ;; Respond to OSC 51;E or OSC 4/10/11 color queries immediately:
+        ;; programs like `duf' read stdin with a tight timeout and give up if
+        ;; the reply waits for the redraw timer.
+        ;; Flushing runs the extractor in the native module, which writes the reply
+        ;; back through the PTY before this filter returns.
+        ;; Carry a 16-byte tail so an introducer split across reads still matches.
+        (let* ((prev (cadr ghostel--pending-output))
+               (carry (and prev (substring prev (max 0 (- (length prev) 16))))))
+          (when (string-match-p
+                 "\e\\]\\(?:4;[0-9]+;\\?\\|10;\\?\\|11;\\?\\|51;E\\)"
+                 (if carry (concat carry output) output))
+            (ghostel--flush-pending-output)))
         ;; Immediate redraw for interactive echo: small output arriving
         ;; within `ghostel-immediate-redraw-interval' of last keystroke.
         (if (and (> ghostel-immediate-redraw-threshold 0)
