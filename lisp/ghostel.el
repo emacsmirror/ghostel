@@ -4023,18 +4023,6 @@ PROCESS is the shell process, WINDOWS is the list of windows."
            ((and (eql height ghostel--term-rows)
                  (eql width ghostel--term-cols))
             (setq size nil))
-           ;; Crop: minibuffer is active, only height shrank, width unchanged, and the
-           ;; terminal is on the primary screen.  Defer the resize so no SIGWINCH is sent
-           ;; — the Emacs window naturally hides the bottom rows, just like a normal
-           ;; buffer.  Alt-screen apps (vim, htop) own the full viewport and must be told
-           ;; the real size to re-layout, so they take the normal-resize path.  If the
-           ;; user switches focus into the ghostel window while the minibuffer is still
-           ;; open, `ghostel--commit-cropped-size' commits the smaller size then.
-           ((and (> (minibuffer-depth) 0)
-                 (eql width ghostel--term-cols)
-                 (< height ghostel--term-rows)
-                 (not (ghostel--alt-screen-p ghostel--term)))
-            (setq size nil))
            ;; Real resize — update the terminal model and redraw.
            (t
             (ghostel--set-size-with-cell-dims
@@ -4077,43 +4065,6 @@ output is arriving."
     (cl-pushnew window ghostel--windows-needing-snap)
     (ghostel--invalidate)))
 
-(defun ghostel--commit-cropped-size (window)
-  "Commit WINDOW's size if the user focused into a cropped ghostel window.
-When the minibuffer opens, `ghostel--window-adjust-process-window-size'
-skips the resize so the PTY keeps its original row count and the bottom
-rows are just hidden.  But if the user switches focus into the ghostel
-window while the minibuffer is still up, they are now actively using
-the smaller viewport — commit the size so the shell/app knows its real
-dimensions.
-
-Intended for buffer-local `window-selection-change-functions'.  When
-registered buffer-locally, Emacs calls this with WINDOW and makes its
-buffer current; we only commit when WINDOW has become the selected
-window (not when it has just been deselected)."
-  (when (and (> (minibuffer-depth) 0)
-             (window-live-p window)
-             (eq window (frame-selected-window (window-frame window)))
-             ghostel--term
-             ghostel--process
-             (process-live-p ghostel--process))
-    (let ((height (with-selected-window window
-                    (floor (window-screen-lines))))
-          (width (window-max-chars-per-line window))
-          (buf (current-buffer)))
-      (unless (and (eql height ghostel--term-rows)
-                   (eql width ghostel--term-cols))
-        (ghostel--set-size-with-cell-dims
-         ghostel--term (max 1 height) (max 1 width))
-        (setq ghostel--term-rows height
-              ghostel--term-cols width
-              ghostel--force-next-redraw t)
-        (set-process-window-size ghostel--process
-                                 (max 1 height) (max 1 width))
-        (when ghostel--redraw-timer
-          (cancel-timer ghostel--redraw-timer)
-          (setq ghostel--redraw-timer nil))
-        (let ((ghostel--redraw-resize-active t))
-          (ghostel--delayed-redraw buf))))))
 
 ;;; Major mode
 
@@ -4145,10 +4096,6 @@ window (not when it has just been deselected)."
   (add-function :after after-focus-change-function #'ghostel--focus-change)
   (add-hook 'window-selection-change-functions #'ghostel--focus-change)
   (add-hook 'window-buffer-change-functions #'ghostel--focus-change)
-  ;; Buffer-local so it only fires for windows showing this buffer, and
-  ;; receives WINDOW directly (rather than FRAME as the default binding).
-  (add-hook 'window-selection-change-functions
-            #'ghostel--commit-cropped-size nil t)
   (add-hook 'window-buffer-change-functions
             #'ghostel--reshow-snap nil t)
   (ghostel--suppress-interfering-modes)

@@ -2202,27 +2202,6 @@ first real focus event."
       (set-window-configuration saved-window-config)
       (ghostel-test--cleanup-focus-buffer buf))))
 
-(ert-deftest ghostel-test-focus-minibuffer ()
-  "Activating the minibuffer triggers focus-out on the ghostel buffer."
-  (let* ((events nil)
-         (focus-fn (lambda () t))
-         (buf (ghostel-test--make-focus-buffer " *ghostel-focus-mini*"))
-         (saved-window-config (current-window-configuration)))
-    (unwind-protect
-        (ghostel-test--with-focus-stub events focus-fn
-          (delete-other-windows)
-          (switch-to-buffer buf)
-          (ghostel--focus-change)
-          (should (equal (car events) (cons buf t)))
-          ;; Simulate minibuffer activation by selecting the minibuffer window.
-          (let ((mb-win (minibuffer-window)))
-            (select-window mb-win)
-            (setq events nil)
-            (ghostel--focus-change)
-            (should (equal (car events) (cons buf nil)))))
-      (set-window-configuration saved-window-config)
-      (ghostel-test--cleanup-focus-buffer buf))))
-
 ;; -----------------------------------------------------------------------
 ;; Test: incremental (partial) redraw
 ;; -----------------------------------------------------------------------
@@ -7758,177 +7737,6 @@ It must also raise `read-process-output-max'.  Same reason as
             (should (null result))
             (should-not set-size-called)))))))
 
-(ert-deftest ghostel-test-resize-minibuffer-crop ()
-  "Minibuffer-induced height shrink on primary screen is cropped (nil)."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (set-size-called nil))
-      (let ((cur-buf (current-buffer)))
-        (cl-letf (((symbol-function 'ghostel--set-size)
-                   (lambda (_term _h _w) (setq set-size-called t)))
-                  ((symbol-function 'ghostel--delayed-redraw) #'ignore)
-                  ((symbol-function 'ghostel--alt-screen-p) (lambda (_t) nil))
-                  ((symbol-function 'minibuffer-depth) (lambda () 1))
-                  ((symbol-function 'process-buffer)
-                   (lambda (_proc) cur-buf))
-                  ((default-value 'window-adjust-process-window-size-function)
-                   (lambda (_proc _wins) '(120 . 25))))
-          (let ((result (ghostel--window-adjust-process-window-size
-                         'fake-proc '(fake-win))))
-            (should (null result))
-            (should-not set-size-called)))))))
-
-(ert-deftest ghostel-test-resize-minibuffer-alt-screen-commits ()
-  "Alt-screen apps (htop/vim) skip the crop path and resize normally."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (set-size-args nil))
-      (let ((cur-buf (current-buffer)))
-        (cl-letf (((symbol-function 'ghostel--set-size)
-                   (lambda (_term h w &rest _) (setq set-size-args (list h w))))
-                  ((symbol-function 'ghostel--delayed-redraw) #'ignore)
-                  ((symbol-function 'ghostel--alt-screen-p) (lambda (_t) t))
-                  ((symbol-function 'minibuffer-depth) (lambda () 1))
-                  ((symbol-function 'process-buffer)
-                   (lambda (_proc) cur-buf))
-                  ((default-value 'window-adjust-process-window-size-function)
-                   (lambda (_proc _wins) '(120 . 25))))
-          (let ((result (ghostel--window-adjust-process-window-size
-                         'fake-proc '(fake-win))))
-            (should (equal '(120 . 25) result))
-            (should (equal '(25 120) set-size-args))
-            (should (eql ghostel--term-rows 25))))))))
-
-(ert-deftest ghostel-test-resize-minibuffer-width-only-shrink-commits ()
-  "Width-only shrink with minibuffer open skips the crop and resizes."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (set-size-args nil))
-      (let ((cur-buf (current-buffer)))
-        (cl-letf (((symbol-function 'ghostel--set-size)
-                   (lambda (_term h w &rest _) (setq set-size-args (list h w))))
-                  ((symbol-function 'ghostel--delayed-redraw) #'ignore)
-                  ((symbol-function 'ghostel--alt-screen-p) (lambda (_t) nil))
-                  ((symbol-function 'minibuffer-depth) (lambda () 1))
-                  ((symbol-function 'process-buffer)
-                   (lambda (_proc) cur-buf))
-                  ;; width 100 < 120, height unchanged.
-                  ((default-value 'window-adjust-process-window-size-function)
-                   (lambda (_proc _wins) '(100 . 40))))
-          (let ((result (ghostel--window-adjust-process-window-size
-                         'fake-proc '(fake-win))))
-            (should (equal '(100 . 40) result))
-            (should (equal '(40 100) set-size-args))))))))
-
-(ert-deftest ghostel-test-commit-cropped-size-on-focus ()
-  "Focus return to a cropped ghostel window commits size and SIGWINCH."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--process 'fake-proc)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (ghostel--force-next-redraw nil)
-          (set-size-args nil)
-          (swsize-args nil)
-          (redraw-called nil))
-      ;; Pass a real `(selected-window)' rather than a fake symbol so
-      ;; `with-selected-window' works without stubbing implementation
-      ;; internals (which differ across the supported Emacs versions).
-      (cl-letf (((symbol-function 'ghostel--set-size)
-                 (lambda (_term h w &rest _) (setq set-size-args (list h w))))
-                ((symbol-function 'ghostel--delayed-redraw)
-                 (lambda (_buf) (setq redraw-called t)))
-                ((symbol-function 'process-live-p) (lambda (_p) t))
-                ((symbol-function 'set-process-window-size)
-                 (lambda (_p h w) (setq swsize-args (list h w))))
-                ;; Regression guard for #192: if the function ever
-                ;; reverts to `window-body-height' instead of
-                ;; `window-screen-lines', the assertions below fail
-                ;; because 99 ≠ 25.
-                ((symbol-function 'window-body-height) (lambda (&rest _) 99))
-                ((symbol-function 'window-screen-lines) (lambda () 25.0))
-                ((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 120))
-                ((symbol-function 'minibuffer-depth) (lambda () 1)))
-        (ghostel--commit-cropped-size (selected-window))
-        (should (equal '(25 120) set-size-args))
-        (should (equal '(25 120) swsize-args))
-        (should (eql ghostel--term-rows 25))
-        (should (eql ghostel--term-cols 120))
-        (should ghostel--force-next-redraw)
-        (should redraw-called)))))
-
-(ert-deftest ghostel-test-commit-cropped-size-noop-outside-minibuffer ()
-  "Focus change outside the minibuffer does not resize."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--process 'fake-proc)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (set-size-called nil)
-          (swsize-called nil))
-      (cl-letf (((symbol-function 'ghostel--set-size)
-                 (lambda (_term _h _w) (setq set-size-called t)))
-                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
-                ((symbol-function 'set-process-window-size)
-                 (lambda (_p _h _w) (setq swsize-called t)))
-                ((symbol-function 'minibuffer-depth) (lambda () 0)))
-        (ghostel--commit-cropped-size 'test-win)
-        (should-not set-size-called)
-        (should-not swsize-called)))))
-
-(ert-deftest ghostel-test-commit-cropped-size-noop-on-deselect ()
-  "Hook firing on WINDOW deselection does not resize."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--process 'fake-proc)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (set-size-called nil)
-          (swsize-called nil))
-      (cl-letf (((symbol-function 'ghostel--set-size)
-                 (lambda (_term _h _w) (setq set-size-called t)))
-                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
-                ((symbol-function 'process-live-p) (lambda (_p) t))
-                ((symbol-function 'set-process-window-size)
-                 (lambda (_p _h _w) (setq swsize-called t)))
-                ((symbol-function 'window-live-p) (lambda (_w) t))
-                ((symbol-function 'window-frame) (lambda (_w) 'test-frame))
-                ;; Selected window is *not* our window — we're being deselected.
-                ((symbol-function 'frame-selected-window)
-                 (lambda (_f) 'other-win))
-                ((symbol-function 'minibuffer-depth) (lambda () 1)))
-        (ghostel--commit-cropped-size 'test-win)
-        (should-not set-size-called)
-        (should-not swsize-called)))))
-
-(ert-deftest ghostel-test-commit-cropped-size-noop-when-matched ()
-  "If the window already matches the committed size, do nothing."
-  (with-temp-buffer
-    (let ((ghostel--term 'fake)
-          (ghostel--process 'fake-proc)
-          (ghostel--term-rows 40)
-          (ghostel--term-cols 120)
-          (set-size-called nil)
-          (swsize-called nil))
-      (cl-letf (((symbol-function 'ghostel--set-size)
-                 (lambda (_term _h _w) (setq set-size-called t)))
-                ((symbol-function 'ghostel--delayed-redraw) #'ignore)
-                ((symbol-function 'process-live-p) (lambda (_p) t))
-                ((symbol-function 'set-process-window-size)
-                 (lambda (_p _h _w) (setq swsize-called t)))
-                ((symbol-function 'window-screen-lines) (lambda () 40.0))
-                ((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 120))
-                ((symbol-function 'minibuffer-depth) (lambda () 1)))
-        (ghostel--commit-cropped-size (selected-window))
-        (should-not set-size-called)
-        (should-not swsize-called)))))
-
 ;;; SIGWINCH delivery tests — verify the PTY actually sends the signal
 
 ;; Uses ghostel-test--wait-for defined at the top of this file.
@@ -8768,7 +8576,6 @@ slip past the unit tests."
     ghostel-test-focus-two-ghostel-buffers
     ghostel-test-focus-frame-blur
     ghostel-test-focus-skips-state-update-when-1004-off
-    ghostel-test-focus-minibuffer
     ghostel-test-raw-key-sequences
     ghostel-test-modifier-number
     ghostel-test-send-event
@@ -8881,13 +8688,6 @@ slip past the unit tests."
     ghostel-test-resize-window-adjust
     ghostel-test-resize-nil-size
     ghostel-test-resize-noop-same-dims
-    ghostel-test-resize-minibuffer-crop
-    ghostel-test-resize-minibuffer-alt-screen-commits
-    ghostel-test-resize-minibuffer-width-only-shrink-commits
-    ghostel-test-commit-cropped-size-on-focus
-    ghostel-test-commit-cropped-size-noop-outside-minibuffer
-    ghostel-test-commit-cropped-size-noop-on-deselect
-    ghostel-test-commit-cropped-size-noop-when-matched
     ghostel-test-sigwinch-reaches-shell-basic
     ghostel-test-sigwinch-reaches-shell-ghostel-style
     ghostel-test-sigwinch-reaches-child-process
