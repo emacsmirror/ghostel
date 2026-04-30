@@ -407,18 +407,35 @@ originating ghostel buffer as `current-buffer', so it may block or
 spawn processes freely without stalling the terminal."
   :type '(choice (const :tag "Disabled" nil) function))
 
-(defcustom ghostel-progress-function #'ghostel-default-progress
+(defcustom ghostel-progress-function
+  (if (locate-library "spinner")
+      #'ghostel-spinner-progress
+    #'ghostel-default-progress)
   "Function called for ConEmu OSC 9;4 progress reports.
 Called with two arguments: STATE (one of the symbols `remove',
 `set', `error', `indeterminate', `pause') and PROGRESS (an integer
 0-100, or nil when not reported).  Set to nil to ignore progress
 reports.
 
+When spinner.el is on the `load-path' at ghostel load time, the
+default is `ghostel-spinner-progress' (which animates the mode
+line during indeterminate progress).  Otherwise it is
+`ghostel-default-progress' (a plain text indicator).
+
 The handler runs synchronously on the VT-parser callpath because
 progress updates are expected to feed the mode line or similar
 cheap UI.  A slow handler here will stall terminal output — defer
 expensive work via `run-at-time' on your own if you need it."
   :type '(choice (const :tag "Disabled" nil) function))
+
+(defcustom ghostel-spinner-type 'progress-bar
+  "Spinner style used by `ghostel-spinner-progress'.
+Passed to `spinner-create' as its first argument; see
+`spinner-types' in spinner.el for the full list (e.g.
+`progress-bar', `horizontal-moving', `vertical-breathing').
+Only consulted when `ghostel-progress-function' is
+`ghostel-spinner-progress'."
+  :type 'symbol)
 
 (defcustom ghostel-enable-url-detection t
   "Automatically detect and linkify URLs in terminal output.
@@ -649,6 +666,10 @@ Bump this only when the Elisp code requires a newer native module
 (declare-function ghostel--set-size "ghostel-module" (term rows cols &optional cell-w cell-h))
 (declare-function ghostel--write-input "ghostel-module")
 (declare-function ghostel--native-uri-at "ghostel-module")
+
+(declare-function spinner-create "spinner")
+(declare-function spinner-start "spinner")
+(declare-function spinner-stop "spinner")
 
 
 ;;; Automatic download and compilation of native module
@@ -2746,6 +2767,52 @@ PROGRESS (an integer 0-100 or nil).  STATE is one of the symbols
       (setq mode-line-process new-val)
       (force-mode-line-update))))
 
+(defvar-local ghostel--spinner-active nil
+  "Non-nil when this buffer has a spinner started by `ghostel-spinner-progress'.
+The spinner object itself lives in spinner.el's buffer-local
+`spinner-current'; this flag is what ghostel inspects to keep
+`ghostel-spinner-progress' idempotent and to give the sentinel
+something to gate teardown on.")
+
+(defun ghostel--spinner-stop ()
+  "Stop this buffer's progress spinner, if any.
+Safe to call when no spinner is running.  Errors from spinner.el
+\(e.g. on a half-torn-down buffer) are swallowed — this is
+teardown.  Does not touch `mode-line-process'."
+  (when ghostel--spinner-active
+    (ignore-errors (spinner-stop))
+    (setq ghostel--spinner-active nil)))
+
+(defun ghostel-spinner-progress (state progress)
+  "Spinner-driven handler for OSC 9;4 ConEmu progress reports.
+Animates `mode-line-process' via spinner.el during indeterminate
+progress; falls back to a static text indicator (matching
+`ghostel-default-progress') for `set', `error', `pause', and `remove'.
+STATE is one of those symbols; PROGRESS is an integer 0-100 or nil.
+
+Requires spinner.el to be available; signals a `user-error' on
+the first call if it is not.  The spinner style is controlled by
+`ghostel-spinner-type'."
+  (unless (require 'spinner nil t)
+    (user-error
+     "Cannot run `ghostel-spinner-progress' without spinner.el — install it \
+from MELPA or set `ghostel-progress-function' to #'ghostel-default-progress"))
+  (if (eq state 'indeterminate)
+      ;; Indeterminate: install spinner.el's mode-line construct.
+      ;; Clear any prior determinate text first so the spinner shows alone,
+      ;; not appended to a stale \" [50%]\".
+      (unless ghostel--spinner-active
+        (setq mode-line-process nil)
+        (spinner-start ghostel-spinner-type)
+        (setq ghostel--spinner-active t))
+    ;; Any other state: stop the spinner and clear the (now-inert)
+    ;; mode-line construct it left behind, then defer to the text indicator.
+    (when ghostel--spinner-active
+      (spinner-stop)
+      (setq mode-line-process nil
+            ghostel--spinner-active nil))
+    (ghostel-default-progress state progress)))
+
 (defun ghostel--handle-notification (title body)
   "Dispatch TITLE and BODY to `ghostel-notification-function'.
 Called synchronously from the native VT parser; the user handler
@@ -3063,6 +3130,7 @@ PROCESS is the shell process, EVENT describes the state change."
           (setq ghostel--plain-link-detection-timer nil
                 ghostel--plain-link-detection-begin nil
                 ghostel--plain-link-detection-end nil))
+        (ghostel--spinner-stop)
         (run-hook-with-args 'ghostel-exit-functions buf event)
         (if ghostel-kill-buffer-on-exit
             (kill-buffer buf)

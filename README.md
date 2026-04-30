@@ -603,37 +603,29 @@ AI agents like Claude Code, and other long-running commands emit it to
 report completion percentage.  Ghostel dispatches these to
 `ghostel-progress-function` with `(STATE PROGRESS)` where STATE is one of
 `remove`, `set`, `error`, `indeterminate`, `pause` and PROGRESS is an
-integer 0-100 or nil.  The default handler, `ghostel-default-progress`,
-updates `mode-line-process` in the terminal buffer:
+integer 0-100 or nil.
 
-- `[42%]` — running at 42% done
-- `[...]` — indeterminate progress
-- `[err 73%]` — error (shown in the `error` face)
-- `[paused 25%]` — paused
-- (cleared) — removed
+Two built-in handlers are available:
 
-#### Example: spinner.el in the mode line
+- `ghostel-default-progress` — plain text in `mode-line-process`:
+  `[42%]`, `[...]`, `[err 73%]`, `[paused 25%]`, or cleared on
+  `remove`.  Zero dependencies.
+- `ghostel-spinner-progress` — animates `mode-line-process` via
+  [spinner.el](https://github.com/Malabarba/spinner.el) during
+  `indeterminate` (e.g. while Claude Code is working) and falls back
+  to the same text indicator for the other states.
 
-For a fancier visual indicator during indeterminate progress, swap
-`ghostel-progress-function` for a handler backed by
-[spinner.el](https://github.com/Malabarba/spinner.el):
+`ghostel-progress-function` defaults to `ghostel-spinner-progress` when
+spinner.el is on the `load-path` at ghostel load time, otherwise to
+`ghostel-default-progress`.  Pin a specific handler explicitly:
 
 ```elisp
-(require 'spinner)
-(defvar-local my/ghostel-spinner nil)
-(defun my/ghostel-progress (state progress)
-  (pcase state
-    ((or 'set 'indeterminate)
-     (unless my/ghostel-spinner
-       (setq my/ghostel-spinner (spinner-create 'progress-bar t))
-       (spinner-start my/ghostel-spinner))
-     (when (eq state 'set)
-       (setq mode-line-process (format " [%d%%]" (or progress 0)))))
-    ((or 'remove 'error 'pause)
-     (when my/ghostel-spinner
-       (spinner-stop my/ghostel-spinner)
-       (setq my/ghostel-spinner nil)))))
-(setq ghostel-progress-function #'my/ghostel-progress)
+;; Pin to spinner (errors with a hint if spinner.el isn't installed):
+(setq ghostel-progress-function #'ghostel-spinner-progress)
+;; Or stay on the plain text indicator:
+(setq ghostel-progress-function #'ghostel-default-progress)
+;; Pick a different spinner style — see `spinner-types' in spinner.el:
+(setq ghostel-spinner-type 'horizontal-moving)
 ```
 
 ### Color Palette

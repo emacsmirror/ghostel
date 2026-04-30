@@ -1752,6 +1752,89 @@ without the real package installed."
     (ghostel-default-progress 'remove nil)
     (should (null mode-line-process))))
 
+(ert-deftest ghostel-test-spinner-progress-errors-without-spinner ()
+  "`ghostel-spinner-progress' signals a user-error when spinner.el is absent.
+Stubs `require' to refuse loading `spinner' so the test does not depend on
+whether spinner.el is actually installed in the test env."
+  (cl-letf* ((orig-require (symbol-function #'require))
+             ((symbol-function #'require)
+              (lambda (feature &optional filename noerror)
+                (if (eq feature 'spinner)
+                    (if noerror nil
+                      (signal 'file-missing (list "stub-no-spinner")))
+                  (funcall orig-require feature filename noerror)))))
+    (with-temp-buffer
+      (should-error (ghostel-spinner-progress 'indeterminate nil)
+                    :type 'user-error))))
+
+(ert-deftest ghostel-test-spinner-progress-indeterminate-starts-once ()
+  "`ghostel-spinner-progress' starts the spinner once across repeat events.
+Multiple `indeterminate' events during one working phase must not stack
+spinners — claude-code emits transitions repeatedly.  Verifies that
+`spinner-start' is called with the configured TYPE symbol (which is the
+form that installs spinner.el's mode-line construct) and that
+`ghostel--spinner-active' tracks the started/stopped state."
+  (let ((start-calls 0)
+        (start-args nil))
+    (cl-letf (((symbol-function #'require)
+               (lambda (&rest _) t))
+              ((symbol-function #'spinner-start)
+               (lambda (&rest args)
+                 (cl-incf start-calls)
+                 (setq start-args args)))
+              ((symbol-function #'spinner-stop) #'ignore))
+      (with-temp-buffer
+        (ghostel-spinner-progress 'indeterminate nil)
+        (ghostel-spinner-progress 'indeterminate nil)
+        (should (= 1 start-calls))
+        (should (equal (list ghostel-spinner-type) start-args))
+        (should ghostel--spinner-active)))))
+
+(ert-deftest ghostel-test-spinner-progress-set-stops-and-shows-percent ()
+  "On `set', the spinner is stopped and `mode-line-process' is the percent text.
+Without the explicit stop, spinner.el's mode-line construct would
+remain (rendering empty alongside the percentage)."
+  (let ((stop-calls 0))
+    (cl-letf (((symbol-function #'require)
+               (lambda (&rest _) t))
+              ((symbol-function #'spinner-start) #'ignore)
+              ((symbol-function #'spinner-stop)
+               (lambda (&rest _) (cl-incf stop-calls))))
+      (with-temp-buffer
+        (ghostel-spinner-progress 'indeterminate nil)
+        (ghostel-spinner-progress 'set 50)
+        (should (= 1 stop-calls))
+        (should-not ghostel--spinner-active)
+        (should (equal " [50%]" mode-line-process))))))
+
+(ert-deftest ghostel-test-spinner-progress-remove-clears-modeline ()
+  "On `remove', the spinner stops and `mode-line-process' is nil."
+  (cl-letf (((symbol-function #'require)
+             (lambda (&rest _) t))
+            ((symbol-function #'spinner-start) #'ignore)
+            ((symbol-function #'spinner-stop) #'ignore))
+    (with-temp-buffer
+      (ghostel-spinner-progress 'indeterminate nil)
+      (ghostel-spinner-progress 'remove nil)
+      (should-not ghostel--spinner-active)
+      (should (null mode-line-process)))))
+
+(ert-deftest ghostel-test-spinner-stop-helper-clears-state ()
+  "`ghostel--spinner-stop' calls `spinner-stop' and clears the active flag.
+The sentinel relies on this helper to drop a live spinner when the shell
+exits, so a regression here would leak the timer past the buffer's life."
+  (let ((stop-calls 0))
+    (cl-letf (((symbol-function #'spinner-stop)
+               (lambda (&rest _) (cl-incf stop-calls))))
+      (with-temp-buffer
+        (setq ghostel--spinner-active t)
+        (ghostel--spinner-stop)
+        (should (= 1 stop-calls))
+        (should-not ghostel--spinner-active)
+        ;; Idempotent: a second call is a no-op.
+        (ghostel--spinner-stop)
+        (should (= 1 stop-calls))))))
+
 (ert-deftest ghostel-test-osc-partial-does-not-starve-later ()
   "A partial OSC must not cannibalize or starve a following complete OSC.
 Input \"\\e]7;PARTIAL\\e]52;c;aGVsbG8=\\a\" would, under a naive
@@ -8710,6 +8793,11 @@ slip past the unit tests."
     ghostel-test-default-notify-uses-alert
     ghostel-test-default-notify-empty-title-uses-buffer-name
     ghostel-test-default-progress-modeline
+    ghostel-test-spinner-progress-errors-without-spinner
+    ghostel-test-spinner-progress-indeterminate-starts-once
+    ghostel-test-spinner-progress-set-stops-and-shows-percent
+    ghostel-test-spinner-progress-remove-clears-modeline
+    ghostel-test-spinner-stop-helper-clears-state
     ghostel-test-flush-pending-output-preserves-buffer
     ghostel-test-copy-mode-cursor
     ghostel-test-ignore-cursor-change

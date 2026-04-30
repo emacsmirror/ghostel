@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `ghostel-spinner-progress`, a built-in handler for
+  `ghostel-progress-function` that animates `mode-line-process` via
+  [spinner.el](https://github.com/Malabarba/spinner.el) during
+  indeterminate progress (e.g. while Claude Code is working) and
+  shows percentage text for determinate states.  spinner.el is a
+  soft dependency: when it is on the `load-path` at ghostel load
+  time, `ghostel-progress-function` defaults to this handler;
+  otherwise the existing `ghostel-default-progress` text indicator
+  is used.  New `ghostel-spinner-type` defcustom (default
+  `progress-bar`) selects the spinner style.
+
 ### Fixed
 - Claude Code's progress reports now update `mode-line-process` in
   ghostel buffers.  Claude Code gates OSC 9;4 progress emission on
