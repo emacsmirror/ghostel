@@ -29,6 +29,28 @@
            ,@body)
        (kill-buffer ,var))))
 
+(defun ghostel-test--mark-all-lines-clean ()
+  "Mark every line in the current buffer with `ghostel-test-clean' property.
+Used with `ghostel-test--line-clean-p' to detect whether the redrawer
+rebuilt a line: a rebuild calls `delete-region' on the line, stripping
+all text properties including this sentinel."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (put-text-property (point) (1+ (point)) 'ghostel-test-clean t)
+        (forward-line 1)))))
+
+(defun ghostel-test--line-clean-p (n)
+  "Return non-nil if line N (0-indexed from `point-min') was not rebuilt.
+The `ghostel-test-clean' property is placed by
+`ghostel-test--mark-all-lines-clean' and is stripped by the redrawer's
+`delete-region' call when a line is rebuilt."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line n)
+    (get-text-property (point) 'ghostel-test-clean)))
+
 (defun ghostel-test--row0 (term)
   "Return the first row text from the render state of TERM."
   (let ((state (ghostel--debug-state term)))
@@ -702,6 +724,161 @@ single redraw):
               ;; after-00 scrolled into scrollback; after-01..after-04 in viewport.
               (should (string-match-p "after-00" content))
               (should (string-match-p "after-04" content)))))
+      (kill-buffer buf))))
+
+;; -----------------------------------------------------------------------
+;; Tests: scrollback rows are not rerendered (dirty-row reuse)
+;; -----------------------------------------------------------------------
+
+(ert-deftest ghostel-test-scrollback-not-rebuilt-on-shrink ()
+  "Scrollback rows survive a vertical-only viewport shrink without rerendering.
+A column-only or full resize erases and rebuilds the buffer, but shrinking
+only the row count must leave existing scrollback lines untouched."
+  (let ((buf (generate-new-buffer " *ghostel-test-sb-shrink*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            ;; 8 rows into a 5-row terminal → lines 0-2 scroll into scrollback.
+            (dotimes (i 8)
+              (ghostel--write-input term (format "row-%02d\r\n" i)))
+            (ghostel--redraw term t)
+            ;; Stamp every line with the sentinel after the initial full render.
+            (ghostel-test--mark-all-lines-clean)
+            ;; Shrink rows only — columns are unchanged so the buffer is not erased.
+            (ghostel--set-size term 3 80)
+            (ghostel--redraw term)
+            ;; The 3 original scrollback lines must not have been rebuilt.
+            (should (ghostel-test--line-clean-p 0))
+            (should (ghostel-test--line-clean-p 1))
+            (should (ghostel-test--line-clean-p 2))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-scrollback-not-rebuilt-on-expand ()
+  "Scrollback rows above the new active area survive a vertical viewport expand.
+Expanding the row count pulls some scrollback rows back into the viewport,
+but rows that remain in scrollback must not be rerendered."
+  (let ((buf (generate-new-buffer " *ghostel-test-sb-expand*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            ;; 20 rows into a 5-row terminal → 15 scrollback rows in the buffer.
+            (dotimes (i 20)
+              (ghostel--write-input term (format "row-%02d\r\n" i)))
+            (ghostel--redraw term t)
+            (ghostel-test--mark-all-lines-clean)
+            ;; Expand to 8 rows.  The resize render re-renders the last 8 lines,
+            ;; so lines 0-11 stay in scrollback and must remain untouched.
+            (ghostel--set-size term 8 80)
+            (ghostel--redraw term)
+            (dotimes (i 12)
+              (should (ghostel-test--line-clean-p i)))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-content-preserved-across-vertical-resizes ()
+  "Buffer content survives expand then shrink without loss or duplication.
+Expands from the initial size (staying within the available scrollback so
+no rows are pulled back) then shrinks below the original size.  No
+assumption is made about which lines are rebuilt; the full buffer text
+must be identical after each resize."
+  (let ((buf (generate-new-buffer " *ghostel-test-resize-roundtrip*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            ;; Write 20 rows into a 5-row terminal → 15 rows in scrollback.
+            (dotimes (i 20)
+              (ghostel--write-input term (format "row-%02d\r\n" i)))
+            (ghostel--redraw term t)
+            (let ((baseline (buffer-substring-no-properties (point-min) (point-max))))
+              ;; Expand to 8 rows — within the 15-row scrollback, so no
+              ;; rows are exhausted from libghostty's scrollback cap.
+              (ghostel--set-size term 8 80)
+              (ghostel--redraw term)
+              (should (equal baseline (buffer-substring-no-properties (point-min) (point-max))))
+              ;; Shrink to 3 rows — smaller than the original 5.
+              (ghostel--set-size term 3 80)
+              (ghostel--redraw term)
+              (should (equal baseline (buffer-substring-no-properties (point-min) (point-max)))))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-shrink-line-count-and-content ()
+  "After a vertical shrink the buffer contracts to the new viewport row count.
+With no scrollback the content fits entirely within the smaller viewport, so
+the buffer must have exactly as many lines as the new row count — no phantom
+rows left over from the previous larger size.  The first line must contain
+the written content; all remaining lines must be empty."
+  (let ((buf (generate-new-buffer " *ghostel-test-shrink-lines*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            (ghostel--write-input term "hello\r\n")
+            (ghostel--redraw term t)
+            (ghostel--set-size term 3 80)
+            (ghostel--redraw term)
+            (should (= 3 (count-lines (point-min) (point-max))))
+            (goto-char (point-min))
+            (should (equal "hello"
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position))))
+            (dotimes (_ 2)
+              (forward-line 1)
+              (should (equal ""
+                             (buffer-substring-no-properties
+                              (line-beginning-position) (line-end-position)))))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-scrollback-not-rebuilt-on-new-row ()
+  "Adding a row to a full viewport does not recreate existing scrollback rows.
+When a new row pushes the top viewport row into scrollback, the rows
+already in scrollback must remain untouched."
+  (let ((buf (generate-new-buffer " *ghostel-test-sb-newrow*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            ;; 8 rows → lines 0-2 are scrollback after the initial render.
+            (dotimes (i 8)
+              (ghostel--write-input term (format "first-%02d\r\n" i)))
+            (ghostel--redraw term t)
+            (ghostel-test--mark-all-lines-clean)
+            ;; One more row scrolls through the viewport.
+            (ghostel--write-input term "extra\r\n")
+            (ghostel--redraw term)
+            ;; The 3 pre-existing scrollback rows must not have been rebuilt.
+            (should (ghostel-test--line-clean-p 0))
+            (should (ghostel-test--line-clean-p 1))
+            (should (ghostel-test--line-clean-p 2))))
+      (kill-buffer buf))))
+
+(ert-deftest ghostel-test-partial-redraw-only-dirty-row-rebuilt ()
+  "Modifying one active row rebuilds only that row; unchanged rows are preserved.
+The incremental dirty-row path calls `delete-region' + re-insert for dirty rows
+and `forward-line' for clean ones.  Only the dirty row loses the sentinel."
+  (let ((buf (generate-new-buffer " *ghostel-test-partial-dirty*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((term (ghostel--new 5 80 1000))
+                 (inhibit-read-only t))
+            ;; Fill the viewport and park the cursor on row 2 before the
+            ;; initial draw.  This avoids dirtying row 4 on the second
+            ;; render: a cursor move from row 4 → row 2 would dirty both
+            ;; rows, breaking the single-dirty-row assertion below.
+            (ghostel--write-input term "row-0\r\nrow-1\r\nrow-2\r\nrow-3\r\nrow-4\e[3;1H")
+            (ghostel--redraw term t)
+            (ghostel-test--mark-all-lines-clean)
+            ;; Cursor is already on row 2; overwrite it in place.
+            (ghostel--write-input term "modified")
+            (ghostel--redraw term)
+            ;; Row 2 was dirty and must have been rebuilt (sentinel gone).
+            (should-not (ghostel-test--line-clean-p 2))
+            ;; The remaining rows were clean and must not have been rebuilt.
+            (should (ghostel-test--line-clean-p 0))
+            (should (ghostel-test--line-clean-p 1))
+            (should (ghostel-test--line-clean-p 3))
+            (should (ghostel-test--line-clean-p 4))))
       (kill-buffer buf))))
 
 ;; -----------------------------------------------------------------------
@@ -3414,7 +3591,7 @@ compile buffer that flashes open and disappears."
           (setq-local ghostel--process proc
                       ghostel-compile--command "sleep 5"
                       ghostel-compile--start-time (current-time)
-                                ghostel-compile--scan-marker (copy-marker (point-max)))
+                      ghostel-compile--scan-marker (copy-marker (point-max)))
           ;; Finalize with a real process attached: must NOT kill the
           ;; buffer AND must NOT insert the default sentinel's
           ;; "Process NAME killed: N" line into it.
@@ -3583,7 +3760,7 @@ scrolled below the window."
                  (lambda (&rest _) (setq jumped t))))
         (setq ghostel-compile--command "make"
               ghostel-compile--start-time (current-time)
-                ghostel-compile--scan-marker (copy-marker (point-max)))
+              ghostel-compile--scan-marker (copy-marker (point-max)))
         (insert "/tmp/x.c:1:1: error: boom\n")
         (ghostel-compile--finalize buf 1 (current-time))
         (should jumped)))))                                    ; first-error called
