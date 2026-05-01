@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-05-01
+
 ### Added
 - `ghostel-spinner-progress`, a built-in handler for
   `ghostel-progress-function` that animates `mode-line-process` via
@@ -16,6 +18,14 @@ All notable changes to this project will be documented in this file.
   is used.  New `ghostel-spinner-type` defcustom (default
   `progress-bar`) selects the spinner style.
 
+### Changed
+- Resize redraw work now scales with the resized axis.  Column
+  changes still trigger a full scrollback rebuild (cell wrapping
+  depends on width), but row-only changes only re-render the
+  visible area and defer until after the next redraw, eliminating
+  noticeable lag when only the height changes
+  ([24f6653](https://github.com/dakra/ghostel/commit/24f6653)).
+
 ### Fixed
 - Claude Code's progress reports now update `mode-line-process` in
   ghostel buffers.  Claude Code gates OSC 9;4 progress emission on
@@ -25,6 +35,42 @@ All notable changes to this project will be documented in this file.
   exports `TERM_PROGRAM_VERSION` matching the vendored libghostty
   pin, satisfying Claude Code's check and any other consumer that
   applies the same probe.
+- Plain-text URL/file detection no longer linkifies the cell the
+  user is typing into.  In tty Emacs, `RET` on a linkified cell
+  resolved to `ghostel-open-link-at-point` (text-property keymap
+  overrides `ghostel-mode-map`), so pressing return at a path the
+  shell echoed — e.g. `cd src/main.rs` — opened the file instead
+  of running the command.  The renderer now marks OSC 133 B..C
+  cells as `ghostel-input` and `ghostel--detect-urls` skips the
+  prompt prefix unconditionally and the active input line.  The
+  bundled bash/zsh/fish integrations are updated to emit 133;A and
+  133;B from inside the prompt itself rather than back-to-back
+  before prompt expansion, so libghostty sees a non-empty PROMPT
+  range
+  ([c145c5e](https://github.com/dakra/ghostel/commit/c145c5e),
+  closes #199).
+- OSC 51;E callbacks dispatch synchronously from the process
+  filter rather than waiting for the next redraw timer tick.
+  Callers like `b4 prep --edit-cover` write the OSC and continue,
+  cleaning up their tempdir before deferred elisp could `find-file`
+  the path; deferred dispatch produced
+  `Setting current directory: No such file or directory`.
+  Matches vterm's behavior.  OSC 51;A (directory tracking) is left
+  deferred since it has no such race
+  ([3f8846c](https://github.com/dakra/ghostel/commit/3f8846c),
+  fixes #209).
+
+## [0.20.1] — 2026-04-29
+
+### Changed
+- Style-run break detection during render uses a cheap
+  `CellStyleKey` rather than a full `CellStyle` comparison, cutting
+  per-cell overhead on large dirty regions
+  ([81f1258](https://github.com/dakra/ghostel/commit/81f1258)).
+- libghostty can now be built with optimization settings independent
+  from the ghostel module itself, so debug ghostel builds no longer
+  drag libghostty into debug mode
+  ([5baea2d](https://github.com/dakra/ghostel/commit/5baea2d)).
 
 ## [0.20.0] — 2026-04-29
 
