@@ -7103,6 +7103,46 @@ side effects have to happen explicitly inside the command."
   ;; ghostel--send-event instead of global backward-kill-word.
   (should (eq (lookup-key ghostel-mode-map (kbd "M-DEL")) #'ghostel--send-event)))
 
+(ert-deftest ghostel-test-special-key-modifier-bindings ()
+  "Modified special keys are bound unless in `ghostel-keymap-exceptions'.
+Covers e.g. C-<return>, C-M-<down>, S-<f1>."
+  (dolist (key '("<return>" "<tab>" "<backspace>" "<escape>"
+                 "<up>" "<down>" "<right>" "<left>"
+                 "<home>" "<end>" "<prior>" "<next>"
+                 "<deletechar>" "<insert>"
+                 "<f1>" "<f2>" "<f3>" "<f4>" "<f5>" "<f6>"
+                 "<f7>" "<f8>" "<f9>" "<f10>" "<f11>" "<f12>"))
+    (dolist (mod '("" "S-" "C-" "M-" "C-S-" "M-S-" "C-M-"))
+      (let* ((key-str (concat mod key))
+             (binding (ignore-errors (lookup-key ghostel-mode-map (kbd key-str)))))
+        (if (member key-str ghostel-keymap-exceptions)
+            (should-not (eq binding #'ghostel--send-event))
+          (when binding
+            (should (eq binding #'ghostel--send-event))))))))
+
+(ert-deftest ghostel-test-special-key-exceptions-honored ()
+  "Keymap construction honors `ghostel-keymap-exceptions' for special keys.
+Regression test for issue #210."
+  (let ((ghostel-keymap-exceptions '("C-<return>" "C-M-<down>" "<f1>"))
+        (map (make-sparse-keymap)))
+    (dolist (key '("<return>" "<f1>" "<down>"))
+      (unless (member key ghostel-keymap-exceptions)
+        (define-key map (kbd key) #'ghostel--send-event))
+      (dolist (mod '("C-" "C-M-"))
+        (let ((key-str (concat mod key)))
+          (unless (member key-str ghostel-keymap-exceptions)
+            (ignore-errors
+              (define-key map (kbd key-str) #'ghostel--send-event))))))
+    ;; Exceptions should not be bound to ghostel--send-event
+    (should-not (eq (lookup-key map (kbd "C-<return>")) #'ghostel--send-event))
+    (should-not (eq (lookup-key map (kbd "C-M-<down>")) #'ghostel--send-event))
+    (should-not (eq (lookup-key map (kbd "<f1>")) #'ghostel--send-event))
+    ;; Non-exceptions should remain bound
+    (should (eq (lookup-key map (kbd "<return>")) #'ghostel--send-event))
+    (should (eq (lookup-key map (kbd "C-M-<return>")) #'ghostel--send-event))
+    (should (eq (lookup-key map (kbd "C-<f1>")) #'ghostel--send-event))
+    (should (eq (lookup-key map (kbd "C-<down>")) #'ghostel--send-event))))
+
 (ert-deftest ghostel-test-send-event-tty-esc-prefix ()
   "Re-inject meta when the key arrives via ESC prefix (TTY Emacs).
 In TTY Emacs, M-<key> is delivered as two events ([27 KEY]) via
@@ -8832,6 +8872,8 @@ slip past the unit tests."
     ghostel-test-c-g-exits-copy-mode
     ghostel-test-inhibit-quit
     ghostel-test-meta-key-bindings
+    ghostel-test-special-key-modifier-bindings
+    ghostel-test-special-key-exceptions-honored
     ghostel-test-send-event-tty-esc-prefix
     ghostel-test-yank-pop-after-yank
     ghostel-test-yank-pop-no-preceding-yank

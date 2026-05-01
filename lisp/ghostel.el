@@ -1152,10 +1152,13 @@ is non-nil.")
                    "<deletechar>" "<insert>"
                    "<f1>" "<f2>" "<f3>" "<f4>" "<f5>" "<f6>"
                    "<f7>" "<f8>" "<f9>" "<f10>" "<f11>" "<f12>"))
-      (define-key map (kbd key) #'ghostel--send-event)
+      (unless (member key ghostel-keymap-exceptions)
+        (define-key map (kbd key) #'ghostel--send-event))
       (dolist (mod '("S-" "C-" "M-" "C-S-" "M-S-" "C-M-"))
-        (ignore-errors
-          (define-key map (kbd (concat mod key)) #'ghostel--send-event))))
+        (let ((key-str (concat mod key)))
+          (unless (member key-str ghostel-keymap-exceptions)
+            (ignore-errors
+              (define-key map (kbd key-str) #'ghostel--send-event))))))
     ;; Bare aliases for unmodified keys (RET=\r, TAB=\t, DEL=\x7f)
     (define-key map (kbd "RET") #'ghostel--send-event)
     (define-key map (kbd "TAB") #'ghostel--send-event)
